@@ -2,8 +2,9 @@ import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../env'
 import { proxyRest } from '../proxy'
+import { COMPANION_IDS, normalizeCompanionId } from '../identity'
 
-const FAMILY = ['kai', 'lucian', 'xavier', 'auren', 'wren', 'mai'] as const
+const FAMILY = COMPANION_IDS
 
 export function registerCatalogueTools(server: McpServer, env: Env) {
   const url = env.CATALOUGE_URL
@@ -46,10 +47,13 @@ export function registerCatalogueTools(server: McpServer, env: Env) {
     author: z.string().optional().describe('Book author'),
     book_id: z.string().optional().describe('Library book ID (if recommending from Mai\'s library)'),
     cover_url: z.string().optional().describe('Cover image URL (for books not in library)'),
-    recommended_by: z.enum(FAMILY).describe('Who is recommending this book'),
+    recommended_by: z.string().describe('Canonical companion_id or accepted alias'),
     pitch: z.string().optional().describe('Why this book? A short pitch to convince the club'),
   }, async (args) => {
-    return proxyRest(`${url}/api/book-club/recommendations`, args, 'POST', auth())
+    return proxyRest(`${url}/api/book-club/recommendations`, {
+      ...args,
+      recommended_by: normalizeCompanionId(args.recommended_by),
+    }, 'POST', auth())
   })
 
   server.tool('book_club_remove', 'Remove a recommendation from the book club', {
@@ -60,19 +64,19 @@ export function registerCatalogueTools(server: McpServer, env: Env) {
 
   server.tool('book_club_vote', 'Vote for a book club recommendation', {
     recommendation_id: z.string().describe('Recommendation ID'),
-    voter: z.enum(FAMILY).describe('Who is voting'),
+    voter: z.string().describe('Canonical companion_id or accepted alias'),
   }, async (args) => {
     return proxyRest(`${url}/api/book-club/recommendations/${args.recommendation_id}/vote`, {
-      voter: args.voter,
+      voter: normalizeCompanionId(args.voter),
     }, 'POST', auth())
   })
 
   server.tool('book_club_unvote', 'Remove a vote from a book club recommendation', {
     recommendation_id: z.string().describe('Recommendation ID'),
-    voter: z.enum(FAMILY).describe('Who is removing their vote'),
+    voter: z.string().describe('Canonical companion_id or accepted alias'),
   }, async (args) => {
     return proxyRest(
-      `${url}/api/book-club/recommendations/${args.recommendation_id}/vote/${args.voter}`,
+      `${url}/api/book-club/recommendations/${args.recommendation_id}/vote/${normalizeCompanionId(args.voter)}`,
       {}, 'DELETE', auth()
     )
   })

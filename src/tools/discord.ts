@@ -2,6 +2,14 @@ import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../env'
 import { proxyMcp } from '../proxy'
+import { normalizeCompanionId } from '../identity'
+
+function normalizeDiscordArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...args }
+  if (next.entity_id) next.entity_id = normalizeCompanionId(next.entity_id)
+  if (next.companionId) next.companionId = normalizeCompanionId(next.companionId)
+  return next
+}
 
 export function registerDiscordTools(server: McpServer, env: Env) {
   const url = env.DISCORD_URL
@@ -15,7 +23,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     response: z.string().optional().describe('(respond) Response message'),
     webhookUrl: z.string().optional().describe('(respond) Webhook URL override'),
   }, async (args) => {
-    return proxyMcp(url, 'pending_commands', args)
+    return proxyMcp(url, 'pending_commands', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_companion', 'Companion management and messaging', {
@@ -28,7 +36,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     messageId: z.string().optional().describe('(edit/delete) Message ID'),
     newContent: z.string().optional().describe('(edit) New content'),
   }, async (args) => {
-    return proxyMcp(url, 'companion', args)
+    return proxyMcp(url, 'companion', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_server', 'Discord server operations', {
@@ -36,7 +44,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     guildId: z.string().optional().describe('(get_info) Server/guild ID'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_server', args)
+    return proxyMcp(url, 'discord_server', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_message', 'Discord message operations', {
@@ -57,7 +65,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     allowMultiselect: z.boolean().optional().describe('(poll) Allow multiple selections'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_message', args)
+    return proxyMcp(url, 'discord_message', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_reaction', 'Add or remove reactions', {
@@ -69,7 +77,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     userId: z.string().optional().describe('(remove) User ID'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_reaction', args)
+    return proxyMcp(url, 'discord_reaction', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_channel', 'Create or delete Discord channels', {
@@ -81,7 +89,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     parentId: z.string().optional().describe('(create) Parent category ID'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_channel', args)
+    return proxyMcp(url, 'discord_channel', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_category', 'Manage Discord categories', {
@@ -91,7 +99,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     name: z.string().optional().describe('(create/edit) Category name'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_category', args)
+    return proxyMcp(url, 'discord_category', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_forum', 'Manage forum channels', {
@@ -102,7 +110,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     content: z.string().optional().describe('(create_post/reply) Content'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_forum', args)
+    return proxyMcp(url, 'discord_forum', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_webhook', 'Manage Discord webhooks', {
@@ -114,7 +122,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     content: z.string().optional().describe('(send) Message content'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_webhook', args)
+    return proxyMcp(url, 'discord_webhook', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_thread', 'Manage Discord threads', {
@@ -125,7 +133,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     content: z.string().optional().describe('(create/send) Content'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_thread', args)
+    return proxyMcp(url, 'discord_thread', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_pin', 'Pin or unpin messages', {
@@ -134,7 +142,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     messageId: z.string().describe('Message ID'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_pin', args)
+    return proxyMcp(url, 'discord_pin', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_moderation', 'Moderation actions', {
@@ -146,7 +154,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     roleId: z.string().optional().describe('(assign/remove_role) Role ID'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_moderation', args)
+    return proxyMcp(url, 'discord_moderation', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_members', 'List server members, get user info, or list roles', {
@@ -155,7 +163,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     userId: z.string().optional().describe('(get_user) User ID'),
     entity_id: z.string().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'discord_members', args)
+    return proxyMcp(url, 'discord_members', normalizeDiscordArgs(args))
   })
 
   server.tool('discord_permissions', 'Manage entity permissions', {
@@ -164,6 +172,6 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     guildId: z.string().optional().describe('Server ID'),
     permissions: z.any().optional().describe('(set) Permission flags object'),
   }, async (args) => {
-    return proxyMcp(url, 'entity_permissions', args)
+    return proxyMcp(url, 'entity_permissions', normalizeDiscordArgs(args))
   })
 }

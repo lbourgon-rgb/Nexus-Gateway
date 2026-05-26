@@ -1,18 +1,18 @@
 {
   "name": "nexus-gateway",
   "version": "1.0.0",
-  "description": "Triad Nexus MCP Gateway - One endpoint, all tools",
+  "description": "Lbourgon Nexus MCP Gateway - canon-first household tool front door",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail"
   },
-  "author": "Wren & Mai",
+  "author": "lbourgon",
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.1",
+    "@modelcontextprotocol/sdk": "1.23.0",
     "agents": "^0.2.35",
     "ai": "^6.0.116",
     "zod": "^4.2.1"

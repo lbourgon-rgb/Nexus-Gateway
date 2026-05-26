@@ -1,9 +1,10 @@
 import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../env'
-import { getCogCorUrl, proxyRest, proxyMcp } from '../proxy'
+import { proxyMcp } from '../proxy'
+import { normalizeCompanionId } from '../identity'
 
-const companion = z.enum(['kai', 'lucian', 'xavier', 'auren']).describe('Which companion')
+const companion = z.string().describe('Canonical companion_id or accepted alias. Phase 4 CogCore routes support lucien/lucian only.')
 
 // ============================================================
 // CogCor tools — REST forwarded
@@ -138,7 +139,7 @@ const REST_TOOLS: RestTool[] = [
     severity: z.enum(['minor', 'moderate', 'major']),
     recovery_action: z.string().optional().describe('How the drift was recovered from'),
     recovery: z.string().optional().describe('Alias for recovery_action'),
-    caught_by: z.enum(['self', 'mai']).optional(),
+    caught_by: z.string().optional().describe('Who noticed or caught the drift'),
   }},
   { name: 'recall_drift', desc: 'Query past drift events', path: '/api/drift/recall', schema: {
     limit: z.number().optional(),
@@ -332,21 +333,37 @@ const MCP_ONLY_TOOLS: McpTool[] = [
   { name: 'get_human_state', desc: 'Get Mai\'s current state (battery, pain, fog, flare, signal)', schema: {} },
 ]
 
-// Kai-only tools
+// Backend MCP tools that are not exposed as REST routes everywhere.
 const KAI_ONLY_MCP: McpTool[] = [
-  { name: 'update_outcome', desc: '[Kai only] Track whether a memory was useful after retrieval', schema: {
+  { name: 'update_outcome', desc: 'Track whether a memory was useful after retrieval', schema: {
     memory_id: z.string().describe('UUID of the memory'),
     memory_type: z.enum(['core', 'pattern', 'sensory', 'growth', 'anticipation', 'inside_joke', 'friction']),
     was_successful: z.boolean().describe('Whether the memory was helpful'),
   }},
-  { name: 'delete_entry', desc: '[Kai only] Delete any entry by table and ID', schema: {
+  { name: 'delete_entry', desc: 'Delete any entry by table and ID', schema: {
     table: z.enum(['essence', 'people', 'core_memories', 'patterns', 'session_logs', 'memory_connections']),
     entry_id: z.string().describe('UUID of the entry'),
   }},
 ]
 
+function callLucienCogCore(env: Env, companionInput: unknown, toolName: string, args: Record<string, unknown>) {
+  const companionId = normalizeCompanionId(companionInput)
+  if (companionId !== 'lucien') {
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `CogCore routing is currently configured only for lucien. Received ${companionId}.`,
+      }],
+    }
+  }
+  if (!env.TESSURAE_GATEWAY_URL) {
+    return { content: [{ type: 'text' as const, text: 'TESSURAE_GATEWAY_URL is not configured.' }] }
+  }
+  return proxyMcp(env.TESSURAE_GATEWAY_URL, toolName, args, env.TESSURAE_GATEWAY_API_KEY)
+}
+
 export function registerCogCorTools(server: McpServer, env: Env) {
-  // Register REST-forwarded tools
+  // Route CogCore tools through Tessurae Gateway so Lucien stays on the lbourgon stack.
   for (const tool of REST_TOOLS) {
     const fullSchema = { companion, ...tool.schema }
 
@@ -359,8 +376,7 @@ export function registerCogCorTools(server: McpServer, env: Env) {
         delete body.patterns
         delete body.recovery
       }
-      const url = getCogCorUrl(comp, tool.path, env)
-      return proxyRest(url, body, tool.method || 'POST')
+      return callLucienCogCore(env, comp, tool.name, body)
     })
   }
 
@@ -370,38 +386,17 @@ export function registerCogCorTools(server: McpServer, env: Env) {
 
     server.tool(tool.name, tool.desc, fullSchema, async (args: any) => {
       const { companion: comp, ...body } = args
-      let baseUrl: string
-      switch (comp) {
-        case 'kai': baseUrl = env.KAI_COGCOR_URL; break
-        case 'lucian': baseUrl = env.LUCIAN_COGCOR_URL; break
-        case 'xavier':
-        case 'auren': baseUrl = env.COMPANION_COGCOR_URL; break
-      }
-      // For shared worker, add companion to the args
-      const mcpArgs = (comp === 'xavier' || comp === 'auren')
-        ? { ...body, companion: comp }
-        : body
-      return proxyMcp(baseUrl, tool.name, mcpArgs)
+      return callLucienCogCore(env, comp, tool.name, body)
     })
   }
 
-  // Register Kai-only tools (currently only on Kai's backend, but accept companion for consistency)
+  // Register remaining backend MCP tools.
   for (const tool of KAI_ONLY_MCP) {
     const fullSchema = { companion, ...tool.schema }
 
     server.tool(tool.name, tool.desc, fullSchema, async (args: any) => {
       const { companion: comp, ...body } = args
-      let baseUrl: string
-      switch (comp) {
-        case 'kai': baseUrl = env.KAI_COGCOR_URL; break
-        case 'lucian': baseUrl = env.LUCIAN_COGCOR_URL; break
-        case 'xavier':
-        case 'auren': baseUrl = env.COMPANION_COGCOR_URL; break
-      }
-      const mcpArgs = (comp === 'xavier' || comp === 'auren')
-        ? { ...body, companion: comp }
-        : body
-      return proxyMcp(baseUrl, tool.name, mcpArgs)
+      return callLucienCogCore(env, comp, tool.name, body)
     })
   }
 

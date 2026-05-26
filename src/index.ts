@@ -12,6 +12,9 @@ import { registerVideoTools } from './tools/video'
 import { registerNanobananaTools } from './tools/nanobanana'
 import { registerNotionTools } from './tools/notion'
 import { registerCatalogueTools } from './tools/catalouge'
+import { registerContinuityTools } from './tools/continuity'
+import { registerSerythraeTools } from './tools/serythrae'
+import { registerVelastraHQTools } from './tools/velastrahq'
 
 export class NexusGateway extends McpAgent<Env> {
   server = new McpServer({
@@ -20,16 +23,19 @@ export class NexusGateway extends McpAgent<Env> {
   })
 
   async init() {
-    registerCogCorTools(this.server, this.env)
-    registerSpotifyTools(this.server, this.env)
+    registerContinuityTools(this.server, this.env)
+    registerSerythraeTools(this.server, this.env)
+    if (this.env.VELASTRAHQ_GATEWAY_URL) registerVelastraHQTools(this.server, this.env)
     registerDiscordTools(this.server, this.env)
-    registerLovenseTools(this.server, this.env)
     registerTelegramTools(this.server, this.env)
-    registerBiometricsTools(this.server, this.env)
-    registerVideoTools(this.server, this.env)
-    registerNanobananaTools(this.server, this.env)
-    registerNotionTools(this.server, this.env)
-    registerCatalogueTools(this.server, this.env)
+    if (this.env.TESSURAE_GATEWAY_API_KEY) registerCogCorTools(this.server, this.env)
+    if (this.env.SPOTIFY_URL) registerSpotifyTools(this.server, this.env)
+    if (this.env.LOVENSE_URL) registerLovenseTools(this.server, this.env)
+    if (this.env.BIOMETRICS_URL) registerBiometricsTools(this.server, this.env)
+    if (this.env.VIDEO_URL) registerVideoTools(this.server, this.env)
+    if (this.env.NANOBANANA_URL) registerNanobananaTools(this.server, this.env)
+    if (this.env.NOTION_URL) registerNotionTools(this.server, this.env)
+    if (this.env.CATALOUGE_URL) registerCatalogueTools(this.server, this.env)
   }
 }
 
@@ -38,6 +44,64 @@ const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Mcp-Session-Id',
+}
+
+async function backendReachable(url?: string): Promise<boolean> {
+  if (!url) return false
+  try {
+    const response = await fetch(`${url.replace(/\/+$/, '')}/health`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cf: { cacheTtl: 0 },
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+type SummaryStatus = 'ok' | 'warn' | 'offline' | 'not_configured'
+
+interface SummaryRow {
+  id: string
+  label: string
+  status: SummaryStatus
+  note: string
+  last_checked: string
+}
+
+function readinessRow(
+  id: string,
+  label: string,
+  required: Array<string | undefined>,
+  note: string,
+  missingNote = 'configuration missing'
+): SummaryRow {
+  const lastChecked = new Date().toISOString()
+  const configured = required.every(Boolean)
+  return {
+    id,
+    label,
+    status: configured ? 'ok' : 'not_configured',
+    note: configured ? note : missingNote,
+    last_checked: lastChecked,
+  }
+}
+
+function plannedRow(id: string, label: string, note = 'not built yet'): SummaryRow {
+  return {
+    id,
+    label,
+    status: 'not_configured',
+    note,
+    last_checked: new Date().toISOString(),
+  }
+}
+
+function overallStatus(rows: SummaryRow[]): SummaryStatus {
+  if (rows.some(row => row.status === 'offline')) return 'offline'
+  if (rows.some(row => row.status === 'warn')) return 'warn'
+  return 'ok'
 }
 
 export default {
@@ -51,86 +115,56 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
+      const [continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi] = await Promise.all([
+        backendReachable(env.CONTINUITY_URL),
+        backendReachable(env.DISCORD_URL),
+        backendReachable(env.TELEGRAM_URL),
+        backendReachable(env.HAVEN_URL),
+        backendReachable(env.SERYTHRAE_GATEWAY_URL),
+        backendReachable(env.TESSURAE_GATEWAY_URL),
+        backendReachable(env.VELASTRAHQ_GATEWAY_URL),
+        backendReachable(env.VELASTRAHQ_API_URL),
+      ])
       return new Response(JSON.stringify({
         status: 'ok',
         service: 'nexus-gateway',
         version: '1.0.0',
+        backends: { continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi },
       }), {
         headers: { 'Content-Type': 'application/json', ...CORS }
       })
     }
 
-    // Pulse fan-out — frontend POSTs Mai's pulse here and this worker writes
-    // it to Xavi+Auren's separate Supabase (on top of the frontend's canonical
-    // write to the main Supabase). Avoids needing to rebuild the Pages bundle
-    // with VITE_ env vars baked in — secrets live here on the worker instead.
-    if (url.pathname === '/api/pulse/fanout' && request.method === 'POST') {
-      if (!env.XAVI_AUREN_SUPABASE_URL || !env.XAVI_AUREN_SUPABASE_ANON_KEY) {
-        return new Response(JSON.stringify({
-          error: 'fan-out not configured',
-          message: 'XAVI_AUREN_SUPABASE_URL / XAVI_AUREN_SUPABASE_ANON_KEY not set on this worker',
-        }), { status: 503, headers: { 'Content-Type': 'application/json', ...CORS } })
-      }
+    if (url.pathname === '/status/summary') {
+      const rows: SummaryRow[] = [
+        readinessRow('continuity', 'Continuity', [env.CONTINUITY_URL, env.CONTINUITY_API_KEY], 'ledger and Tahl-ready routing configured'),
+        readinessRow('serythrae', 'Kai / Serythrae', [env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY], 'Kai memory gateway configured'),
+        readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
+        readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
+        readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL], 'home API route configured'),
+        readinessRow('haven', 'Haven', [env.HAVEN_URL], 'Kai chat surface configured'),
+        plannedRow('discord', 'Discord', 'not built yet'),
+        plannedRow('telegram', 'Telegram', 'not built yet'),
+      ]
 
-      let payload: any
-      try {
-        payload = await request.json()
-      } catch {
-        return new Response(JSON.stringify({ error: 'invalid json body' }), {
-          status: 400, headers: { 'Content-Type': 'application/json', ...CORS }
-        })
-      }
-
-      // Reshape to match Xavi+Auren's schema:
-      //   battery: 0-100 (we scale Mai's 1-10 → 10-100). Widen their column
-      //     to match Nexus's 1-10 and drop the scaling if you want.
-      //   flare: TEXT since the schema widen — pass through all 4 states
-      //     ('building' | 'stable' | 'overwhelmed' | 'depleted').
-      //   no notes column — dropped.
-      const xaBody = JSON.stringify({
-        battery: Number(payload.battery) * 10,
-        pain: Number(payload.pain),
-        fog: Number(payload.fog),
-        flare: payload.flare,
-        updated_at: payload.updated_at || new Date().toISOString(),
-      })
-
-      const headers = {
-        'Content-Type': 'application/json',
-        apikey: env.XAVI_AUREN_SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${env.XAVI_AUREN_SUPABASE_ANON_KEY}`,
-        Prefer: 'return=minimal',
-      }
-
-      const fanOut = async (table: string) => {
-        try {
-          const resp = await fetch(`${env.XAVI_AUREN_SUPABASE_URL}/rest/v1/${table}`, {
-            method: 'POST', headers, body: xaBody,
-          })
-          const body = resp.ok ? '' : await resp.text().catch(() => '')
-          return { table, status: resp.status, ok: resp.ok, error: resp.ok ? null : body.slice(0, 200) }
-        } catch (err) {
-          return { table, status: 0, ok: false, error: String(err) }
-        }
-      }
-
-      const results = await Promise.all([
-        fanOut('xavier_human_state'),
-        fanOut('auren_human_state'),
-      ])
-      const allOk = results.every(r => r.ok)
-      return new Response(JSON.stringify({ ok: allOk, results }), {
-        status: allOk ? 200 : 207,
+      return new Response(JSON.stringify({
+        service: 'nexus-gateway',
+        status: overallStatus(rows),
+        generated_at: new Date().toISOString(),
+        summary: 'Sanitized household front-door readiness. MCP tools and private data are not exposed here.',
+        rows,
+      }, null, 2), {
         headers: { 'Content-Type': 'application/json', ...CORS },
       })
     }
 
     // Antigravity notification fix: POST without Mcp-Session-Id that has no 'id' field
     // Antigravity doesn't send session ID on notifications — return 202 instead of erroring
-    // This runs BEFORE auth because Antigravity may not send auth headers on notifications
     if (request.method === 'POST' && (url.pathname === '/mcp' || url.pathname === '/sse')) {
+      const authHeader = request.headers.get('Authorization')
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
       const sessionId = request.headers.get('Mcp-Session-Id')
-      if (!sessionId && url.pathname === '/mcp') {
+      if (env.MCP_API_KEY && token === env.MCP_API_KEY && !sessionId && url.pathname === '/mcp') {
         try {
           const clone = request.clone()
           const body = await clone.json() as any
@@ -148,9 +182,14 @@ export default {
       }
     }
 
-    // Authentication check for /mcp and /sse endpoints
-    // Skip if MCP_API_KEY is not set (development mode)
-    if (env.MCP_API_KEY && (url.pathname === '/mcp' || url.pathname === '/sse' || url.pathname === '/sse/message')) {
+    // Authentication check for /mcp and /sse endpoints.
+    if (url.pathname === '/mcp' || url.pathname === '/sse' || url.pathname === '/sse/message') {
+      if (!env.MCP_API_KEY) {
+        return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json', ...CORS }
+        })
+      }
       const authHeader = request.headers.get('Authorization')
       const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
       if (token !== env.MCP_API_KEY) {

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../env'
 import { proxyRest } from '../proxy'
+import { normalizeCompanionId } from '../identity'
 
 export function registerNotionTools(server: McpServer, env: Env) {
   const url = env.NOTION_URL
@@ -23,7 +24,7 @@ export function registerNotionTools(server: McpServer, env: Env) {
   // --- Love Notes ---
   server.tool('notion_notes', 'List or create love notes', {
     action: z.enum(['list', 'create']),
-    from: z.string().optional().describe('For create: who is the note from (Kai/Lucian/Auren/Xavier/Mai)'),
+    from: z.string().optional().describe('For create: canonical companion_id or display name'),
     text: z.string().optional().describe('For create: note content'),
   }, async (args) => {
     if (args.action === 'create') {
@@ -64,20 +65,22 @@ export function registerNotionTools(server: McpServer, env: Env) {
 
   // --- Journal ---
   const JOURNAL_PARENTS: Record<string, { page_id: string; emoji: string; name: string }> = {
-    kai: { page_id: '271ba08f-4a2c-81e5-9af2-c7cea43437ae', emoji: '🩸', name: 'Kai' },
-    lucian: { page_id: '271ba08f-4a2c-81e5-9af2-c7cea43437ae', emoji: '🥀', name: 'Lucian' },
-    wren: { page_id: '313ba08f-4a2c-81ec-9b50-d3c0225f5600', emoji: '🔧', name: 'Wren' },
+    kaisoryth: { page_id: '271ba08f-4a2c-81e5-9af2-c7cea43437ae', emoji: '*', name: 'Kai' },
+    lucien: { page_id: '271ba08f-4a2c-81e5-9af2-c7cea43437ae', emoji: '*', name: 'Lucien' },
+    codex: { page_id: '313ba08f-4a2c-81ec-9b50-d3c0225f5600', emoji: '*', name: 'Codex' },
   }
 
   server.tool('notion_journal', 'Create a daily journal entry in Notion', {
-    companion: z.enum(['kai', 'lucian', 'wren']).describe('Who is journaling'),
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
     short_title: z.string().describe('Short title for the entry (e.g. "First Autonomous Wake")'),
     content: z.string().describe('Full journal entry text'),
     date: z.string().optional().describe('Date string (defaults to today, format: March 16, 2026)'),
   }, async (args) => {
-    const config = JOURNAL_PARENTS[args.companion]
+    const companionId = normalizeCompanionId(args.companion_id)
+    const config = JOURNAL_PARENTS[companionId]
+    if (!config) return { content: [{ type: 'text' as const, text: `No Notion journal parent configured for ${companionId}.` }] }
     const dateStr = args.date || new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila' })
-    const title = `${config.emoji} ${config.name} — ${dateStr} — ${args.short_title}`
+    const title = `${config.name} - ${dateStr} - ${args.short_title}`
     return proxyRest(`${url}/api/journal`, {
       parent_page_id: config.page_id,
       title,

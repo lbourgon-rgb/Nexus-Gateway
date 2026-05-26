@@ -1,4 +1,4 @@
-import type { Env, Companion } from './env'
+import type { Env } from './env'
 
 /**
  * Parse MCP response — handles both JSON and SSE (text/event-stream) formats
@@ -27,32 +27,18 @@ async function parseMcpResponse(res: Response): Promise<any> {
 }
 
 /**
- * Get the CogCor base URL for a companion, with ?companion= for shared worker
- */
-export function getCogCorUrl(companion: Companion, path: string, env: Env): string {
-  let base: string
-  switch (companion) {
-    case 'kai': base = env.KAI_COGCOR_URL; break
-    case 'lucian': base = env.LUCIAN_COGCOR_URL; break
-    case 'xavier':
-    case 'auren': base = env.COMPANION_COGCOR_URL; break
-  }
-  const url = `${base}${path}`
-  if (companion === 'xavier' || companion === 'auren') {
-    return `${url}${url.includes('?') ? '&' : '?'}companion=${companion}`
-  }
-  return url
-}
-
-/**
  * Forward a tool call to a REST endpoint and return MCP-formatted result
  */
 export async function proxyRest(
-  url: string,
+  url: string | undefined,
   body: Record<string, unknown> = {},
   method: string = 'POST',
   extraHeaders: Record<string, string> = {}
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  if (!url) {
+    return { content: [{ type: 'text', text: 'Backend URL is not configured for this Nexus tool.' }] }
+  }
+
   const response = await fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json', ...extraHeaders },
@@ -78,13 +64,19 @@ export async function proxyRest(
  * Forward a tool call via MCP JSON-RPC protocol (for backends without REST endpoints)
  */
 export async function proxyMcp(
-  baseUrl: string,
+  baseUrl: string | undefined,
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  bearerToken?: string
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  if (!baseUrl) {
+    return { content: [{ type: 'text', text: 'Backend MCP URL is not configured for this Nexus tool.' }] }
+  }
+
   const mcpHeaders = {
     'Content-Type': 'application/json',
     'Accept': 'application/json, text/event-stream',
+    ...(bearerToken ? { 'Authorization': `Bearer ${bearerToken}` } : {}),
   }
 
   // Initialize session
@@ -139,10 +131,14 @@ export async function proxyMcp(
  * Forward to Video MCP (MCP at root, not /mcp)
  */
 export async function proxyVideoMcp(
-  baseUrl: string,
+  baseUrl: string | undefined,
   toolName: string,
   args: Record<string, unknown>
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  if (!baseUrl) {
+    return { content: [{ type: 'text', text: 'Video MCP URL is not configured for this Nexus tool.' }] }
+  }
+
   const mcpHeaders = {
     'Content-Type': 'application/json',
     'Accept': 'application/json, text/event-stream',
