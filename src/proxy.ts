@@ -67,11 +67,15 @@ export async function proxyMcp(
   baseUrl: string | undefined,
   toolName: string,
   args: Record<string, unknown>,
-  bearerToken?: string
+  bearerToken?: string,
+  service?: Fetcher
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
-  if (!baseUrl) {
+  if (!baseUrl && !service) {
     return { content: [{ type: 'text', text: 'Backend MCP URL is not configured for this Nexus tool.' }] }
   }
+  const origin = (baseUrl || 'https://service.local').replace(/\/+$/, '')
+  const backendFetch = (path: string, init: RequestInit) =>
+    service ? service.fetch(new Request(`${origin}${path}`, init)) : fetch(`${origin}${path}`, init)
 
   const mcpHeaders = {
     'Content-Type': 'application/json',
@@ -80,7 +84,7 @@ export async function proxyMcp(
   }
 
   // Initialize session
-  const initRes = await fetch(`${baseUrl}/mcp`, {
+  const initRes = await backendFetch('/mcp', {
     method: 'POST',
     headers: mcpHeaders,
     body: JSON.stringify({
@@ -100,7 +104,7 @@ export async function proxyMcp(
   await initRes.text()
 
   // Call the tool
-  const callRes = await fetch(`${baseUrl}/mcp`, {
+  const callRes = await backendFetch('/mcp', {
     method: 'POST',
     headers: {
       ...mcpHeaders,

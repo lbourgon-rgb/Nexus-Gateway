@@ -46,14 +46,16 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Mcp-Session-Id',
 }
 
-async function backendReachable(url?: string): Promise<boolean> {
-  if (!url) return false
+async function backendReachable(url?: string, service?: Fetcher): Promise<boolean> {
+  if (!url && !service) return false
   try {
-    const response = await fetch(`${url.replace(/\/+$/, '')}/health`, {
+    const target = `${(url || 'https://service.local').replace(/\/+$/, '')}/health`
+    const init = {
       method: 'GET',
       headers: { Accept: 'application/json' },
       cf: { cacheTtl: 0 },
-    })
+    }
+    const response = service ? await service.fetch(new Request(target, init)) : await fetch(target, init)
     return response.ok
   } catch {
     return false
@@ -117,7 +119,7 @@ export default {
     if (url.pathname === '/health') {
       const [continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi] = await Promise.all([
         backendReachable(env.CONTINUITY_URL),
-        backendReachable(env.DISCORD_URL),
+        backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL),
         backendReachable(env.HAVEN_URL),
         backendReachable(env.SERYTHRAE_GATEWAY_URL),
@@ -143,7 +145,7 @@ export default {
         readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
         readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL], 'home API route configured'),
         readinessRow('haven', 'Haven', [env.HAVEN_URL], 'Kai chat surface configured'),
-        plannedRow('discord', 'Discord', 'not built yet'),
+        readinessRow('discord', 'Discord', [env.DISCORD_URL], 'Discord Resonance route configured'),
         plannedRow('telegram', 'Telegram', 'not built yet'),
       ]
 
