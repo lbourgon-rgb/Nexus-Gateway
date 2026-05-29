@@ -20,6 +20,7 @@ export function registerDiscordTools(server: McpServer, env: Env) {
     entity_id: z.string().optional().describe('Filter by companion/entity'),
     requestId: z.string().optional().describe('(respond/dismiss) Request ID from get'),
     response: z.string().optional().describe('(respond) Response message'),
+    dismissalReason: z.string().optional().describe('(dismiss) Explanation for why this pending message is not being answered'),
     webhookUrl: z.string().optional().describe('(respond) Webhook URL override'),
   }, async (args) => {
     return proxyMcp(url, 'pending_commands', normalizeDiscordArgs(args), undefined, service)
