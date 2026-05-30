@@ -120,7 +120,7 @@ export default {
     // Health check
     if (url.pathname === '/health') {
       const [continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi] = await Promise.all([
-        backendReachable(env.CONTINUITY_URL),
+        backendReachable(env.CONTINUITY_URL, env.CONTINUITY),
         backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL),
         backendReachable(env.HAVEN_URL),

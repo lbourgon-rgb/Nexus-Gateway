@@ -1,5 +1,6 @@
 export interface Env {
   MCP_OBJECT: DurableObjectNamespace
+  CONTINUITY?: Fetcher
   DISCORD?: Fetcher
   TAHL?: Fetcher
 

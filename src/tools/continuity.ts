@@ -8,7 +8,7 @@ type ToolResult = { content: Array<{ type: 'text'; text: string }> }
 const role = z.enum(['human', 'companion', 'system', 'tool'])
 
 async function continuityFetch(env: Env, path: string, init: RequestInit = {}): Promise<ToolResult> {
-  if (!env.CONTINUITY_URL) {
+  if (!env.CONTINUITY_URL && !env.CONTINUITY) {
     return { content: [{ type: 'text', text: 'CONTINUITY_URL is not configured.' }] }
   }
   const headers = new Headers(init.headers)
@@ -16,7 +16,9 @@ async function continuityFetch(env: Env, path: string, init: RequestInit = {}): 
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (env.CONTINUITY_API_KEY) headers.set('Authorization', `Bearer ${env.CONTINUITY_API_KEY}`)
 
-  const response = await fetch(`${env.CONTINUITY_URL}${path}`, { ...init, headers })
+  const target = `${(env.CONTINUITY_URL || 'https://continuity-worker.internal').replace(/\/+$/, '')}${path}`
+  const request = new Request(target, { ...init, headers })
+  const response = env.CONTINUITY ? await env.CONTINUITY.fetch(request) : await fetch(request)
   const text = await response.text()
   let body = text
   try {
