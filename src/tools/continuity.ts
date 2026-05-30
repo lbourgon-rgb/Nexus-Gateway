@@ -93,4 +93,63 @@ export function registerContinuityTools(server: McpServer, env: Env) {
     if (args.limit) params.set('limit', String(args.limit))
     return continuityFetch(env, `/mirror/export${params.toString() ? `?${params}` : ''}`, { method: 'GET' })
   })
+
+  server.tool('continuity_wake_candidates', 'List runner wake candidates for harness-bound companions.', {
+    companion_id: z.string().optional().describe('Canonical companion_id or accepted alias'),
+    status: z.enum(['pending', 'claimed', 'responded', 'released', 'failed', 'skipped']).optional(),
+    limit: z.number().optional(),
+  }, async (args) => {
+    const params = new URLSearchParams()
+    if (args.companion_id) params.set('companion_id', normalizeCompanionId(args.companion_id))
+    if (args.status) params.set('status', args.status)
+    if (args.limit) params.set('limit', String(args.limit))
+    return continuityFetch(env, `/wake-candidates${params.toString() ? `?${params}` : ''}`, { method: 'GET' })
+  })
+
+  server.tool('continuity_claim_wake', 'Claim one wake candidate with a runner lease.', {
+    runner_id: z.string(),
+    companion_id: z.string().optional().describe('Canonical companion_id or accepted alias'),
+    candidate_id: z.string().optional(),
+    event_id: z.string().optional(),
+    lease_seconds: z.number().optional(),
+  }, async (args) => continuityFetch(env, '/wake-candidates/claim', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...args,
+      companion_id: args.companion_id ? normalizeCompanionId(args.companion_id) : undefined,
+    }),
+  }))
+
+  server.tool('continuity_wake_context', 'Fetch the source event, recent thread events, and Tahl state for a wake candidate.', {
+    candidate_id: z.string(),
+  }, async (args) => continuityFetch(env, `/wake-candidates/${encodeURIComponent(args.candidate_id)}/context`, { method: 'GET' }))
+
+  server.tool('continuity_submit_wake_response', 'Submit a runner response and mark the wake candidate responded.', {
+    candidate_id: z.string(),
+    runner_id: z.string(),
+    content: z.string(),
+    external_message_id: z.string().optional(),
+    author: z.any().optional(),
+    metadata: z.any().optional(),
+    raw: z.any().optional(),
+  }, async (args) => {
+    const { candidate_id, ...body } = args
+    return continuityFetch(env, `/wake-candidates/${encodeURIComponent(candidate_id)}/response`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  })
+
+  server.tool('continuity_release_wake', 'Release, fail, or skip a runner wake lease.', {
+    candidate_id: z.string(),
+    runner_id: z.string(),
+    status: z.enum(['released', 'failed', 'skipped']).optional(),
+    failure_reason: z.string().optional(),
+  }, async (args) => {
+    const { candidate_id, ...body } = args
+    return continuityFetch(env, `/wake-candidates/${encodeURIComponent(candidate_id)}/release`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  })
 }

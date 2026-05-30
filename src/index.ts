@@ -15,6 +15,7 @@ import { registerCatalogueTools } from './tools/catalouge'
 import { registerContinuityTools } from './tools/continuity'
 import { registerSerythraeTools } from './tools/serythrae'
 import { registerVelastraHQTools } from './tools/velastrahq'
+import { registerTahlTools } from './tools/tahl'
 
 export class NexusGateway extends McpAgent<Env> {
   server = new McpServer({
@@ -24,6 +25,7 @@ export class NexusGateway extends McpAgent<Env> {
 
   async init() {
     registerContinuityTools(this.server, this.env)
+    registerTahlTools(this.server, this.env)
     registerSerythraeTools(this.server, this.env)
     if (this.env.VELASTRAHQ_GATEWAY_URL) registerVelastraHQTools(this.server, this.env)
     registerDiscordTools(this.server, this.env)
