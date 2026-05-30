@@ -1,0 +1,45 @@
+name = "nexus-gateway"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "MCP_OBJECT"
+class_name = "NexusGateway"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NexusGateway"]
+
+[[services]]
+binding = "CONTINUITY"
+service = "continuity-worker"
+
+[[services]]
+binding = "DISCORD"
+service = "discord-companion-bot"
+
+[[services]]
+binding = "TAHL"
+service = "velastrahq-tahl"
+
+[vars]
+CONTINUITY_URL = "https://continuity-worker.lbourgon.workers.dev"
+DISCORD_URL = "https://discord-companion-bot.lbourgon.workers.dev"
+TELEGRAM_URL = "https://telegram-cloud.lbourgon.workers.dev"
+HAVEN_URL = "https://haven.lbourgon.workers.dev"
+SERYTHRAE_GATEWAY_URL = "https://serythrae-gw.lbourgon.workers.dev"
+TESSURAE_GATEWAY_URL = "https://tessurae-gateway.lbourgon.workers.dev"
+VELASTRAHQ_GATEWAY_URL = "https://velastrahq-gw.lbourgon.workers.dev"
+VELASTRAHQ_API_URL = "https://velastrahq-api.lbourgon.workers.dev"
+
+# Secrets:
+# - MCP_API_KEY protects /mcp and /sse endpoints.
+# - CONTINUITY_API_KEY authorizes Continuity Worker calls.
+# - TESSURAE_GATEWAY_API_KEY authorizes Tessurae Gateway MCP calls.
+# - SERYTHRAE_GATEWAY_API_KEY authorizes Serythrae Gateway MCP calls.
+# - VELASTRAHQ_GATEWAY_API_KEY authorizes VelastraHQ Gateway MCP calls.
+# - CATALOUGE_TOKEN authorizes private Catalouge calls, if CATALOUGE_URL is set.
