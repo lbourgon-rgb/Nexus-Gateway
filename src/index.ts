@@ -122,7 +122,7 @@ export default {
       const [continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi] = await Promise.all([
         backendReachable(env.CONTINUITY_URL, env.CONTINUITY),
         backendReachable(env.DISCORD_URL, env.DISCORD),
-        backendReachable(env.TELEGRAM_URL),
+        backendReachable(env.TELEGRAM_URL, env.TELEGRAM),
         backendReachable(env.HAVEN_URL),
         backendReachable(env.SERYTHRAE_GATEWAY_URL),
         backendReachable(env.TESSURAE_GATEWAY_URL),

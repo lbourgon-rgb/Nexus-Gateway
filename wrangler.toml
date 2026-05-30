@@ -23,6 +23,10 @@ binding = "DISCORD"
 service = "discord-companion-bot"
 
 [[services]]
+binding = "TELEGRAM"
+service = "telegram-cloud"
+
+[[services]]
 binding = "TAHL"
 service = "velastrahq-tahl"
 

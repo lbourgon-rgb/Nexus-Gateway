@@ -2,6 +2,7 @@ export interface Env {
   MCP_OBJECT: DurableObjectNamespace
   CONTINUITY?: Fetcher
   DISCORD?: Fetcher
+  TELEGRAM?: Fetcher
   TAHL?: Fetcher
 
   // Lbourgon backend URLs (set in wrangler.toml [vars])

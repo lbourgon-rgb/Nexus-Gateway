@@ -18,6 +18,7 @@ function normalizeTelegramArgs(args: Record<string, unknown>): Record<string, un
 
 export function registerTelegramTools(server: McpServer, env: Env) {
   const url = env.TELEGRAM_URL
+  const service = env.TELEGRAM
 
   server.tool('telegram_send', 'Send a Telegram message as a companion', {
     companion_id,
@@ -25,7 +26,7 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     message: z.string().describe('Message text (supports Markdown)'),
     parse_mode: z.enum(['Markdown', 'MarkdownV2', 'HTML']).optional(),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_send', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_send', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_voice', 'Send a voice message as a companion', {
@@ -33,13 +34,13 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     chat_id: z.string(),
     message: z.string().describe('Text to convert to voice'),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_voice', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_voice', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_get_me', 'Get bot profile info for a companion', {
     companion_id,
   }, async (args) => {
-    return proxyMcp(url, 'telegram_get_me', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_get_me', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_get_updates', 'Get recent messages/updates for a companion bot', {
@@ -47,14 +48,14 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     limit: z.number().optional().describe('Max updates to fetch'),
     offset: z.number().optional(),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_get_updates', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_get_updates', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_get_chat', 'Get info about a Telegram chat', {
     companion_id,
     chat_id: z.string(),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_get_chat', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_get_chat', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_send_photo', 'Send a photo as a companion via Telegram', {
@@ -65,7 +66,7 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     parse_mode: z.enum(['Markdown', 'MarkdownV2', 'HTML']).optional(),
     reply_to_message_id: z.number().optional().describe('Message ID to reply to'),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_send_photo', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_send_photo', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_send_document', 'Send a document/file as a companion via Telegram', {
@@ -76,7 +77,7 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     parse_mode: z.enum(['Markdown', 'MarkdownV2', 'HTML']).optional(),
     reply_to_message_id: z.number().optional().describe('Message ID to reply to'),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_send_document', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_send_document', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_send_video', 'Send a video as a companion via Telegram', {
@@ -87,7 +88,7 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     parse_mode: z.enum(['Markdown', 'MarkdownV2', 'HTML']).optional(),
     reply_to_message_id: z.number().optional().describe('Message ID to reply to'),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_send_video', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_send_video', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_send_audio', 'Send audio as a companion via Telegram', {
@@ -100,7 +101,7 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     performer: z.string().optional().describe('Audio performer/artist'),
     reply_to_message_id: z.number().optional().describe('Message ID to reply to'),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_send_audio', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_send_audio', normalizeTelegramArgs(args), undefined, service)
   })
 
   server.tool('telegram_send_animation', 'Send a GIF/animation as a companion via Telegram', {
@@ -111,6 +112,6 @@ export function registerTelegramTools(server: McpServer, env: Env) {
     parse_mode: z.enum(['Markdown', 'MarkdownV2', 'HTML']).optional(),
     reply_to_message_id: z.number().optional().describe('Message ID to reply to'),
   }, async (args) => {
-    return proxyMcp(url, 'telegram_send_animation', normalizeTelegramArgs(args))
+    return proxyMcp(url, 'telegram_send_animation', normalizeTelegramArgs(args), undefined, service)
   })
 }
