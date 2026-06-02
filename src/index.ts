@@ -108,6 +108,72 @@ function overallStatus(rows: SummaryRow[]): SummaryStatus {
   return 'ok'
 }
 
+async function callJsonTool(baseUrl: string | undefined, apiKey: string | undefined, tool: string, args: Record<string, unknown>) {
+  if (!baseUrl) return { ok: false, skipped: true, reason: 'backend URL is not configured' }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/tool`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ tool, arguments: args }),
+  })
+  const text = await response.text()
+  let data: unknown = text
+  try {
+    data = JSON.parse(text)
+  } catch {}
+  return response.ok ? data : { ok: false, status: response.status, body: text.slice(0, 500) }
+}
+
+async function kaiContext(request: Request, env: Env): Promise<Response> {
+  if (!env.MCP_API_KEY) {
+    return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+  const authHeader = request.headers.get('Authorization')
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+  if (token !== env.MCP_API_KEY) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+
+  const body = request.method === 'POST' ? await request.json().catch(() => ({})) as Record<string, unknown> : {}
+  const message = String(body.message || '')
+  const channel = typeof body.channel === 'string' ? body.channel : undefined
+  const gatewayUrl = env.SERYTHRAE_GATEWAY_URL
+  const gatewayKey = env.SERYTHRAE_GATEWAY_API_KEY
+
+  const [orient, surface] = await Promise.all([
+    callJsonTool(gatewayUrl, gatewayKey, 'nesteq_orient', {}),
+    callJsonTool(gatewayUrl, gatewayKey, 'thalamus_surface', {
+      companion: 'kaisoryth',
+      message,
+      channel,
+      mode: 'auto',
+      max_results: 5,
+    }),
+  ])
+
+  return new Response(JSON.stringify({
+    ok: true,
+    companion_id: 'kaisoryth',
+    source: 'nexus-gateway',
+    mind_backend: {
+      gateway_configured: Boolean(env.SERYTHRAE_GATEWAY_URL),
+      direct_mind_configured: Boolean(env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY),
+      direct_mind_url: env.SERYTHRAE_MIND_URL || null,
+    },
+    orient,
+    surface,
+  }, null, 2), {
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url)
@@ -142,7 +208,8 @@ export default {
     if (url.pathname === '/status/summary') {
       const rows: SummaryRow[] = [
         readinessRow('continuity', 'Continuity', [env.CONTINUITY_URL, env.CONTINUITY_API_KEY], 'ledger and Tahl-ready routing configured'),
-        readinessRow('serythrae', 'Kai / Serythrae', [env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY], 'Kai memory gateway configured'),
+        readinessRow('serythrae', 'Kai / Serythrae', [env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY], 'Kai gateway fallback configured'),
+        readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
         readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
         readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
         readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL], 'home API route configured'),
@@ -160,6 +227,10 @@ export default {
       }, null, 2), {
         headers: { 'Content-Type': 'application/json', ...CORS },
       })
+    }
+
+    if (url.pathname === '/api/kaisoryth/context' && (request.method === 'POST' || request.method === 'GET')) {
+      return kaiContext(request, env)
     }
 
     // Antigravity notification fix: POST without Mcp-Session-Id that has no 'id' field
