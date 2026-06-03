@@ -16,6 +16,7 @@ import { registerContinuityTools } from './tools/continuity'
 import { registerSerythraeTools } from './tools/serythrae'
 import { registerVelastraHQTools } from './tools/velastrahq'
 import { registerTahlTools } from './tools/tahl'
+import { proxyMcp } from './proxy'
 
 export class NexusGateway extends McpAgent<Env> {
   server = new McpServer({
@@ -125,6 +126,15 @@ async function callJsonTool(baseUrl: string | undefined, apiKey: string | undefi
   return response.ok ? data : { ok: false, status: response.status, body: text.slice(0, 500) }
 }
 
+async function callKaiMindTool(env: Env, tool: string, args: Record<string, unknown>) {
+  if (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY) {
+    const result = await proxyMcp(env.SERYTHRAE_MIND_URL, tool, args, env.SERYTHRAE_MIND_API_KEY)
+    return { source: 'serythrae-mind-direct', result }
+  }
+  const result = await callJsonTool(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY, tool, args)
+  return { source: 'serythrae-gw-fallback', result }
+}
+
 async function kaiContext(request: Request, env: Env): Promise<Response> {
   if (!env.MCP_API_KEY) {
     return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
@@ -144,12 +154,9 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   const body = request.method === 'POST' ? await request.json().catch(() => ({})) as Record<string, unknown> : {}
   const message = String(body.message || '')
   const channel = typeof body.channel === 'string' ? body.channel : undefined
-  const gatewayUrl = env.SERYTHRAE_GATEWAY_URL
-  const gatewayKey = env.SERYTHRAE_GATEWAY_API_KEY
-
   const [orient, surface] = await Promise.all([
-    callJsonTool(gatewayUrl, gatewayKey, 'nesteq_orient', {}),
-    callJsonTool(gatewayUrl, gatewayKey, 'thalamus_surface', {
+    callKaiMindTool(env, 'nesteq_orient', {}),
+    callKaiMindTool(env, 'thalamus_surface', {
       companion: 'kaisoryth',
       message,
       channel,
@@ -163,7 +170,8 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
     companion_id: 'kaisoryth',
     source: 'nexus-gateway',
     mind_backend: {
-      gateway_configured: Boolean(env.SERYTHRAE_GATEWAY_URL),
+      preferred: env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY ? 'serythrae-mind-direct' : 'serythrae-gw-fallback',
+      gateway_fallback_configured: Boolean(env.SERYTHRAE_GATEWAY_URL),
       direct_mind_configured: Boolean(env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY),
       direct_mind_url: env.SERYTHRAE_MIND_URL || null,
     },
@@ -200,6 +208,18 @@ export default {
         service: 'nexus-gateway',
         version: '1.0.0',
         backends: { continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi },
+        configured: {
+          continuity: Boolean(env.CONTINUITY_URL || env.CONTINUITY),
+          discord: Boolean(env.DISCORD_URL || env.DISCORD),
+          telegram: Boolean(env.TELEGRAM_URL || env.TELEGRAM),
+          haven: Boolean(env.HAVEN_URL),
+          serythrae_gateway_fallback: Boolean(env.SERYTHRAE_GATEWAY_URL),
+          serythrae_mind_direct: Boolean(env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY),
+          tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
+          velastrahq: Boolean(env.VELASTRAHQ_GATEWAY_URL),
+          velastrahqApi: Boolean(env.VELASTRAHQ_API_URL),
+        },
+        note: 'backends reports unauthenticated public health reachability; configured reports private/front-door wiring presence.',
       }), {
         headers: { 'Content-Type': 'application/json', ...CORS }
       })
