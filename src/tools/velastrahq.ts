@@ -26,6 +26,19 @@ function velastraEqMcp(env: Env, toolName: string, args: Record<string, unknown>
   return proxyMcp(env.VELASTRAHQ_EQ_URL, toolName, args, env.VELASTRAHQ_EQ_API_KEY)
 }
 
+async function morzarEqWithGatewayFallback(
+  env: Env,
+  directToolName: string,
+  gatewayToolName: string,
+  directArgs: Record<string, unknown>,
+  gatewayArgs: Record<string, unknown>
+) {
+  const direct = await velastraEqMcp(env, directToolName, directArgs)
+  const text = direct.content.map(item => item.text).join('\n')
+  if (!/unauthorized|error\s+401|not configured/i.test(text)) return direct
+  return velastraMcp(env, gatewayToolName, gatewayArgs)
+}
+
 export function registerVelastraHQTools(server: McpServer, env: Env) {
   server.tool('velastrahq_status', 'Read VelastraHQ gateway health.', {}, async () => {
     return proxyRest(env.VELASTRAHQ_GATEWAY_URL ? `${env.VELASTRAHQ_GATEWAY_URL}/health` : undefined, {}, 'GET')
@@ -45,14 +58,14 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
     companion_id: z.string().optional().default('morzar'),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraEqMcp(env, 'nesteq_orient', {})
+    return morzarEqWithGatewayFallback(env, 'nesteq_orient', 'velastrahq_orient', {}, {})
   })
 
   server.tool('morzar_ground', "Read Mor'zar active threads, recent feelings, and warm entities directly through VelastraHQ EQ.", {
     companion_id: z.string().optional().default('morzar'),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraEqMcp(env, 'nesteq_ground', {})
+    return morzarEqWithGatewayFallback(env, 'nesteq_ground', 'velastrahq_ground', {}, {})
   })
 
   server.tool('morzar_memory_search', "Search Mor'zar memories and feelings directly through VelastraHQ EQ.", {
@@ -62,11 +75,9 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
     context: z.string().optional(),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraEqMcp(env, 'nesteq_search', {
-      query: args.query,
-      n_results: args.n_results,
-      context: args.context,
-    })
+    const directArgs = { query: args.query, n_results: args.n_results, context: args.context }
+    const gatewayArgs = { query: args.query, n_results: args.n_results }
+    return morzarEqWithGatewayFallback(env, 'nesteq_search', 'velastrahq_search', directArgs, gatewayArgs)
   })
 
   server.tool('morzar_journals', "Read Mor'zar journals through VelastraHQ Gateway.", {
@@ -88,7 +99,13 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
     companion_id: z.string().optional().default('morzar'),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraEqMcp(env, 'hearth_presence', { action: 'get', companion: 'morzar' })
+    return morzarEqWithGatewayFallback(
+      env,
+      'hearth_presence',
+      'velastrahq_presence',
+      { action: 'get', companion: 'morzar' },
+      {}
+    )
   })
 
   server.tool('vel_health', 'Read the shared VelastraHQ health dashboard.', {}, async () => {
