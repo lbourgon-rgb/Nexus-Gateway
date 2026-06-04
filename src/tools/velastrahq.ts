@@ -16,6 +16,16 @@ function velastraMcp(env: Env, toolName: string, args: Record<string, unknown>) 
   return proxyMcp(env.VELASTRAHQ_GATEWAY_URL, toolName, args, env.VELASTRAHQ_GATEWAY_API_KEY)
 }
 
+function velastraEqMcp(env: Env, toolName: string, args: Record<string, unknown>) {
+  if (!env.VELASTRAHQ_EQ_URL) {
+    return { content: [{ type: 'text' as const, text: "Mor'zar EQ URL is not configured for this Nexus tool." }] }
+  }
+  if (!env.VELASTRAHQ_EQ_API_KEY) {
+    return { content: [{ type: 'text' as const, text: "VELASTRAHQ_EQ_API_KEY is not configured; set it as a Worker secret to use Mor'zar direct EQ tools." }] }
+  }
+  return proxyMcp(env.VELASTRAHQ_EQ_URL, toolName, args, env.VELASTRAHQ_EQ_API_KEY)
+}
+
 export function registerVelastraHQTools(server: McpServer, env: Env) {
   server.tool('velastrahq_status', 'Read VelastraHQ gateway health.', {}, async () => {
     return proxyRest(env.VELASTRAHQ_GATEWAY_URL ? `${env.VELASTRAHQ_GATEWAY_URL}/health` : undefined, {}, 'GET')
@@ -25,29 +35,37 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
     return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/health` : undefined, {}, 'GET')
   })
 
-  server.tool('morzar_orient', "Read Mor'zar identity anchors and current context through VelastraHQ Gateway.", {
+  server.tool('morzar_eq_status', "Read Mor'zar direct EQ worker health.", {}, async () => {
+    return proxyRest(env.VELASTRAHQ_EQ_URL ? `${env.VELASTRAHQ_EQ_URL}/health` : undefined, {}, 'GET', env.VELASTRAHQ_EQ_API_KEY ? {
+      Authorization: `Bearer ${env.VELASTRAHQ_EQ_API_KEY}`,
+    } : {})
+  })
+
+  server.tool('morzar_orient', "Read Mor'zar identity anchors and current context directly through VelastraHQ EQ.", {
     companion_id: z.string().optional().default('morzar'),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraMcp(env, 'velastrahq_orient', {})
+    return velastraEqMcp(env, 'nesteq_orient', {})
   })
 
-  server.tool('morzar_ground', "Read Mor'zar active threads, recent feelings, and warm entities.", {
+  server.tool('morzar_ground', "Read Mor'zar active threads, recent feelings, and warm entities directly through VelastraHQ EQ.", {
     companion_id: z.string().optional().default('morzar'),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraMcp(env, 'velastrahq_ground', {})
+    return velastraEqMcp(env, 'nesteq_ground', {})
   })
 
-  server.tool('morzar_memory_search', "Search Mor'zar memories and feelings through VelastraHQ Gateway.", {
+  server.tool('morzar_memory_search', "Search Mor'zar memories and feelings directly through VelastraHQ EQ.", {
     companion_id: z.string().optional().default('morzar'),
     query: z.string(),
     n_results: z.number().optional().default(5),
+    context: z.string().optional(),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraMcp(env, 'velastrahq_search', {
+    return velastraEqMcp(env, 'nesteq_search', {
       query: args.query,
       n_results: args.n_results,
+      context: args.context,
     })
   })
 
@@ -70,7 +88,7 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
     companion_id: z.string().optional().default('morzar'),
   }, async (args) => {
     requireMorzar(args.companion_id)
-    return velastraMcp(env, 'velastrahq_presence', {})
+    return velastraEqMcp(env, 'hearth_presence', { action: 'get', companion: 'morzar' })
   })
 
   server.tool('vel_health', 'Read the shared VelastraHQ health dashboard.', {}, async () => {

@@ -40,6 +40,7 @@ SERYTHRAE_MIND_URL = "https://mind.serythrae.com"
 TESSURAE_GATEWAY_URL = "https://tessurae-gateway.lbourgon.workers.dev"
 VELASTRAHQ_GATEWAY_URL = "https://velastrahq-gw.lbourgon.workers.dev"
 VELASTRAHQ_API_URL = "https://velastrahq-api.lbourgon.workers.dev"
+VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
 
 # Secrets:
 # - MCP_API_KEY protects /mcp and /sse endpoints.
@@ -48,4 +49,5 @@ VELASTRAHQ_API_URL = "https://velastrahq-api.lbourgon.workers.dev"
 # - SERYTHRAE_GATEWAY_API_KEY authorizes Serythrae Gateway MCP calls.
 # - SERYTHRAE_MIND_API_KEY authorizes direct Kai/NESTeq mind calls.
 # - VELASTRAHQ_GATEWAY_API_KEY authorizes VelastraHQ Gateway MCP calls.
+# - VELASTRAHQ_EQ_API_KEY authorizes direct Mor'zar/VelastraHQ EQ MCP calls.
 # - CATALOUGE_TOKEN authorizes private Catalouge calls, if CATALOUGE_URL is set.

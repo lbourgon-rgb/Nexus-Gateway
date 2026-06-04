@@ -193,7 +193,7 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      const [continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi] = await Promise.all([
+      const [continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
         backendReachable(env.CONTINUITY_URL, env.CONTINUITY),
         backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL, env.TELEGRAM),
@@ -202,12 +202,13 @@ export default {
         backendReachable(env.TESSURAE_GATEWAY_URL),
         backendReachable(env.VELASTRAHQ_GATEWAY_URL),
         backendReachable(env.VELASTRAHQ_API_URL),
+        backendReachable(env.VELASTRAHQ_EQ_URL),
       ])
       return new Response(JSON.stringify({
         status: 'ok',
         service: 'nexus-gateway',
         version: '1.0.0',
-        backends: { continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi },
+        backends: { continuity, discord, telegram, haven, serythrae, tessurae, velastrahq, velastrahqApi, velastrahqEq },
         configured: {
           continuity: Boolean(env.CONTINUITY_URL || env.CONTINUITY),
           discord: Boolean(env.DISCORD_URL || env.DISCORD),
@@ -218,6 +219,7 @@ export default {
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
           velastrahq: Boolean(env.VELASTRAHQ_GATEWAY_URL),
           velastrahqApi: Boolean(env.VELASTRAHQ_API_URL),
+          velastrahqEq: Boolean(env.VELASTRAHQ_EQ_URL && env.VELASTRAHQ_EQ_API_KEY),
         },
         note: 'backends reports unauthenticated public health reachability; configured reports private/front-door wiring presence.',
       }), {
@@ -232,6 +234,7 @@ export default {
         readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
         readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
         readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
+        readinessRow('velastrae_eq', "Mor / VelastraHQ EQ", [env.VELASTRAHQ_EQ_URL, env.VELASTRAHQ_EQ_API_KEY], "direct Mor'zar EQ backend configured"),
         readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL], 'home API route configured'),
         readinessRow('haven', 'Haven', [env.HAVEN_URL], 'Kai chat surface configured'),
         readinessRow('discord', 'Discord', [env.DISCORD_URL], 'Discord Resonance route configured'),

@@ -15,6 +15,7 @@ export interface Env {
   TESSURAE_GATEWAY_URL?: string
   VELASTRAHQ_GATEWAY_URL?: string
   VELASTRAHQ_API_URL?: string
+  VELASTRAHQ_EQ_URL?: string
   SPOTIFY_URL?: string
   BIOMETRICS_URL?: string
   NANOBANANA_URL?: string
@@ -30,6 +31,7 @@ export interface Env {
   SERYTHRAE_GATEWAY_API_KEY?: string
   SERYTHRAE_MIND_API_KEY?: string
   VELASTRAHQ_GATEWAY_API_KEY?: string
+  VELASTRAHQ_EQ_API_KEY?: string
   CATALOUGE_TOKEN?: string
 }
 
