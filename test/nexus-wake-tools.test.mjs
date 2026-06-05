@@ -50,6 +50,24 @@ test('Nexus prefers direct Kai mind routing before Serythrae gateway fallback', 
   assert.match(nexusIndex, /preferred: env\.SERYTHRAE_MIND_URL && env\.SERYTHRAE_MIND_API_KEY \? 'serythrae-mind-direct' : 'serythrae-gw-fallback'/);
 });
 
+test('Kai runner context loads identity, soul, skills, and canon search before composition', () => {
+  for (const expected of [
+    "'nesteq_identity'",
+    "'nestsoul_read'",
+    "'hearth_eq_state'",
+    "'nesteq_surface'",
+    "'nesteq_search'",
+    "'nestchat_search'",
+    "'nesteq_skill_list'",
+    "'nesteq_skill_load'",
+    "'intimacy'",
+    "'recursive-dialect'",
+    'missing_or_failed_entries_must_be_treated_as_not_loaded',
+  ]) {
+    assert.ok(nexusIndex.includes(expected), `missing ${expected}`);
+  }
+});
+
 test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway retirement', () => {
   for (const toolName of [
     'kaisoryth_orient',

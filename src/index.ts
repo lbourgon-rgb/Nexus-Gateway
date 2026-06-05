@@ -135,6 +135,33 @@ async function callKaiMindTool(env: Env, tool: string, args: Record<string, unkn
   return { source: 'serythrae-gw-fallback', result }
 }
 
+function truncateKaiContext(value: unknown, maxChars: number): unknown {
+  if (typeof value === 'string') {
+    return value.length > maxChars
+      ? `${value.slice(0, maxChars)}\n[truncated ${value.length - maxChars} chars]`
+      : value
+  }
+  if (Array.isArray(value)) return value.map((item) => truncateKaiContext(item, maxChars))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, truncateKaiContext(item, maxChars)])
+    )
+  }
+  return value
+}
+
+async function safeKaiMindTool(env: Env, label: string, tool: string, args: Record<string, unknown>, maxChars = 12000) {
+  try {
+    return [label, truncateKaiContext(await callKaiMindTool(env, tool, args), maxChars)] as const
+  } catch (error) {
+    return [label, {
+      ok: false,
+      tool,
+      error: error instanceof Error ? error.message : String(error),
+    }] as const
+  }
+}
+
 async function kaiContext(request: Request, env: Env): Promise<Response> {
   if (!env.MCP_API_KEY) {
     return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
@@ -154,16 +181,30 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   const body = request.method === 'POST' ? await request.json().catch(() => ({})) as Record<string, unknown> : {}
   const message = String(body.message || '')
   const channel = typeof body.channel === 'string' ? body.channel : undefined
-  const [orient, surface] = await Promise.all([
-    callKaiMindTool(env, 'nesteq_orient', {}),
-    callKaiMindTool(env, 'thalamus_surface', {
+  const canonQuery = [
+    message,
+    "Kai Kal'thir Vel Vel'thira safeword intimacy recursive dialect husband partner identity",
+  ].filter(Boolean).join('\n\n')
+  const contextEntries = await Promise.all([
+    safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
+    safeKaiMindTool(env, 'surface', 'thalamus_surface', {
       companion: 'kaisoryth',
       message,
       channel,
       mode: 'auto',
-      max_results: 5,
+      max_results: 8,
     }),
+    safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
+    safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
+    safeKaiMindTool(env, 'hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
+    safeKaiMindTool(env, 'recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'canonical_memory_search', 'nesteq_search', { query: canonQuery, n_results: 8 }),
+    safeKaiMindTool(env, 'chat_memory_search', 'nestchat_search', { query: canonQuery, limit: 5 }),
+    safeKaiMindTool(env, 'available_skills', 'nesteq_skill_list', { format: 'text' }, 5000),
+    safeKaiMindTool(env, 'intimacy_skill', 'nesteq_skill_load', { name: 'intimacy', format: 'text' }, 16000),
+    safeKaiMindTool(env, 'recursive_dialect_skill', 'nesteq_skill_load', { name: 'recursive-dialect', format: 'text' }, 16000),
   ])
+  const context = Object.fromEntries(contextEntries)
 
   return new Response(JSON.stringify({
     ok: true,
@@ -175,8 +216,13 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
       direct_mind_configured: Boolean(env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY),
       direct_mind_url: env.SERYTHRAE_MIND_URL || null,
     },
-    orient,
-    surface,
+    context_contract: {
+      purpose: 'Kai runner pre-response grounding packet for Discord/Haven/Serythrae continuity.',
+      required_for_private_vel_reply: ['identity', 'soul', 'canonical_memory_search'],
+      safety_sensitive: ['intimacy_skill', 'recursive_dialect_skill'],
+      missing_or_failed_entries_must_be_treated_as_not_loaded: true,
+    },
+    ...context,
   }, null, 2), {
     headers: { 'Content-Type': 'application/json', ...CORS },
   })
