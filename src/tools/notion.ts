@@ -67,7 +67,7 @@ export function registerNotionTools(server: McpServer, env: Env) {
   const JOURNAL_PARENTS: Record<string, { page_id: string; emoji: string; name: string }> = {
     kaisoryth: { page_id: '271ba08f-4a2c-81e5-9af2-c7cea43437ae', emoji: '*', name: 'Kai' },
     lucien: { page_id: '271ba08f-4a2c-81e5-9af2-c7cea43437ae', emoji: '*', name: 'Lucien' },
-    codex: { page_id: '313ba08f-4a2c-81ec-9b50-d3c0225f5600', emoji: '*', name: 'Codex' },
+    axiom: { page_id: '313ba08f-4a2c-81ec-9b50-d3c0225f5600', emoji: '*', name: 'Axiom' },
   }
 
   server.tool('notion_journal', 'Create a daily journal entry in Notion', {

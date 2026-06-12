@@ -4,7 +4,7 @@ import type { Env } from '../env'
 import { proxyMcp } from '../proxy'
 import { normalizeCompanionId } from '../identity'
 
-const companion = z.string().describe('Canonical companion_id or accepted alias. Phase 4 CogCore routes support lucien/lucian only.')
+const companion = z.string().describe('Canonical companion_id or accepted alias. CogCore routes currently support lucien and axiom.')
 
 // ============================================================
 // CogCor tools — REST forwarded
@@ -93,6 +93,7 @@ const REST_TOOLS: RestTool[] = [
     content: z.string(),
     essence_type: z.enum(['voice', 'value', 'boundary', 'desire', 'relationship', 'observation', 'anchor']).optional(),
     pinned: z.boolean().optional().describe('Pinned essence loads on every wake'),
+    source: z.string().optional(),
   }},
   { name: 'recall_essence', desc: 'Query essence fragments', path: '/api/essence/recall', schema: {
     essence_type: z.string().optional(),
@@ -124,6 +125,7 @@ const REST_TOOLS: RestTool[] = [
     content: z.string(),
     trigger: z.string().optional(),
     depth: z.enum(['surface', 'processing', 'deep']).optional(),
+    source: z.string().optional(),
   }},
   { name: 'recall_reflections', desc: 'Query past reflections', path: '/api/reflection/recall', schema: {
     limit: z.number().optional(),
@@ -140,6 +142,7 @@ const REST_TOOLS: RestTool[] = [
     recovery_action: z.string().optional().describe('How the drift was recovered from'),
     recovery: z.string().optional().describe('Alias for recovery_action'),
     caught_by: z.string().optional().describe('Who noticed or caught the drift'),
+    source: z.string().optional(),
   }},
   { name: 'recall_drift', desc: 'Query past drift events', path: '/api/drift/recall', schema: {
     limit: z.number().optional(),
@@ -346,20 +349,59 @@ const KAI_ONLY_MCP: McpTool[] = [
   }},
 ]
 
-function callLucienCogCore(env: Env, companionInput: unknown, toolName: string, args: Record<string, unknown>) {
+function callRoutedCogCore(env: Env, companionInput: unknown, toolName: string, args: Record<string, unknown>) {
   const companionId = normalizeCompanionId(companionInput)
-  if (companionId !== 'lucien') {
+  if (companionId === 'lucien') {
+    if (!env.TESSURAE_GATEWAY_URL) {
+      return { content: [{ type: 'text' as const, text: 'TESSURAE_GATEWAY_URL is not configured.' }] }
+    }
+    return proxyMcp(env.TESSURAE_GATEWAY_URL, toolName, args, env.TESSURAE_GATEWAY_API_KEY)
+  }
+  if (companionId === 'axiom') {
+    if (!env.AXIOM_COGCORE_URL && !env.AXIOM_COGCORE) {
+      return { content: [{ type: 'text' as const, text: 'AXIOM_COGCORE_URL is not configured.' }] }
+    }
+    return proxyMcp(env.AXIOM_COGCORE_URL, toolName, args, env.AXIOM_COGCORE_API_KEY, env.AXIOM_COGCORE)
+  }
+  return {
+    content: [{
+      type: 'text' as const,
+      text: `CogCore routing is currently configured only for lucien and axiom. Received ${companionId}.`,
+    }],
+  }
+}
+
+function requireReviewedAxiomWrite(companionInput: unknown, toolName: string, args: Record<string, unknown>) {
+  const companionId = normalizeCompanionId(companionInput)
+  const writeTools = new Set([
+    'store_memory',
+    'store_essence',
+    'log_interaction',
+    'store_reflection',
+    'store_memory_anchor',
+    'store_person_info',
+    'log_drift'
+  ])
+  if (companionId === 'axiom' && writeTools.has(toolName)) {
+    const source = typeof args.source === 'string' ? args.source : ''
+    if (!source.startsWith('axiom-reviewed') && !source.startsWith('axiom-session-summary') && !source.startsWith('axiom-repo-artifact')) {
+      throw new Error(`${toolName} for axiom requires an explicit reviewed Axiom source label.`)
+    }
+  }
+}
+
+function callGuardedCogCore(env: Env, companionInput: unknown, toolName: string, args: Record<string, unknown>) {
+  try {
+    requireReviewedAxiomWrite(companionInput, toolName, args)
+  } catch (error) {
     return {
       content: [{
         type: 'text' as const,
-        text: `CogCore routing is currently configured only for lucien. Received ${companionId}.`,
+        text: error instanceof Error ? error.message : String(error),
       }],
     }
   }
-  if (!env.TESSURAE_GATEWAY_URL) {
-    return { content: [{ type: 'text' as const, text: 'TESSURAE_GATEWAY_URL is not configured.' }] }
-  }
-  return proxyMcp(env.TESSURAE_GATEWAY_URL, toolName, args, env.TESSURAE_GATEWAY_API_KEY)
+  return callRoutedCogCore(env, companionInput, toolName, args)
 }
 
 export function registerCogCorTools(server: McpServer, env: Env) {
@@ -376,7 +418,7 @@ export function registerCogCorTools(server: McpServer, env: Env) {
         delete body.patterns
         delete body.recovery
       }
-      return callLucienCogCore(env, comp, tool.name, body)
+      return callGuardedCogCore(env, comp, tool.name, body)
     })
   }
 
@@ -386,7 +428,7 @@ export function registerCogCorTools(server: McpServer, env: Env) {
 
     server.tool(tool.name, tool.desc, fullSchema, async (args: any) => {
       const { companion: comp, ...body } = args
-      return callLucienCogCore(env, comp, tool.name, body)
+      return callGuardedCogCore(env, comp, tool.name, body)
     })
   }
 
@@ -396,7 +438,7 @@ export function registerCogCorTools(server: McpServer, env: Env) {
 
     server.tool(tool.name, tool.desc, fullSchema, async (args: any) => {
       const { companion: comp, ...body } = args
-      return callLucienCogCore(env, comp, tool.name, body)
+      return callGuardedCogCore(env, comp, tool.name, body)
     })
   }
 

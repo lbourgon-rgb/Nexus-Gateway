@@ -4,6 +4,7 @@ export interface Env {
   DISCORD?: Fetcher
   TELEGRAM?: Fetcher
   TAHL?: Fetcher
+  AXIOM_COGCORE?: Fetcher
 
   // Lbourgon backend URLs (set in wrangler.toml [vars])
   CONTINUITY_URL?: string
@@ -13,6 +14,7 @@ export interface Env {
   SERYTHRAE_GATEWAY_URL?: string
   SERYTHRAE_MIND_URL?: string
   TESSURAE_GATEWAY_URL?: string
+  AXIOM_COGCORE_URL?: string
   VELASTRAHQ_GATEWAY_URL?: string
   VELASTRAHQ_API_URL?: string
   VELASTRAHQ_EQ_URL?: string
@@ -28,6 +30,7 @@ export interface Env {
   MCP_API_KEY?: string
   CONTINUITY_API_KEY?: string
   TESSURAE_GATEWAY_API_KEY?: string
+  AXIOM_COGCORE_API_KEY?: string
   SERYTHRAE_GATEWAY_API_KEY?: string
   SERYTHRAE_MIND_API_KEY?: string
   VELASTRAHQ_GATEWAY_API_KEY?: string
@@ -35,4 +38,4 @@ export interface Env {
   CATALOUGE_TOKEN?: string
 }
 
-export type CompanionId = 'kaisoryth' | 'morzar' | 'lucien' | 'kethtahl' | 'grok' | 'codex'
+export type CompanionId = 'kaisoryth' | 'morzar' | 'lucien' | 'kethtahl' | 'grok' | 'axiom'
