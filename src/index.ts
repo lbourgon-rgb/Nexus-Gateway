@@ -49,6 +49,57 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Mcp-Session-Id',
 }
 
+const EMPTY_MCP_RESOURCE_RESULTS: Record<string, Record<string, unknown>> = {
+  'resources/list': { resources: [] },
+  'resources/templates/list': { resourceTemplates: [] },
+}
+
+function mcpJson(data: unknown, init: ResponseInit = {}) {
+  return new Response(JSON.stringify(data), {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...CORS,
+      ...(init.headers || {}),
+    },
+  })
+}
+
+function emptyResourceResponse(message: Record<string, unknown>) {
+  const method = typeof message.method === 'string' ? message.method : ''
+  const result = EMPTY_MCP_RESOURCE_RESULTS[method]
+  if (!result || !('id' in message)) return null
+  return {
+    jsonrpc: '2.0',
+    id: message.id,
+    result,
+  }
+}
+
+async function handleEmptyResourceMethods(request: Request): Promise<Response | null> {
+  let body: unknown
+  try {
+    body = await request.clone().json()
+  } catch {
+    return null
+  }
+
+  if (Array.isArray(body)) {
+    const handled = body
+      .filter((message): message is Record<string, unknown> => Boolean(message) && typeof message === 'object' && !Array.isArray(message))
+      .map(emptyResourceResponse)
+    if (handled.length && handled.every(Boolean)) return mcpJson(handled)
+    return null
+  }
+
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    const handled = emptyResourceResponse(body as Record<string, unknown>)
+    if (handled) return mcpJson(handled)
+  }
+
+  return null
+}
+
 async function backendReachable(url?: string, service?: Fetcher): Promise<boolean> {
   if (!url && !service) return false
   try {
@@ -346,6 +397,11 @@ export default {
           headers: { 'Content-Type': 'application/json', ...CORS }
         })
       }
+    }
+
+    if (request.method === 'POST' && url.pathname === '/mcp') {
+      const resourceResponse = await handleEmptyResourceMethods(request)
+      if (resourceResponse) return resourceResponse
     }
 
     // SSE transport
