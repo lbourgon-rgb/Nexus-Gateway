@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { CompanionId } from './env'
 
-export const COMPANION_IDS = ['kaisoryth', 'morzar', 'lucien', 'kethtahl', 'grok', 'axiom'] as const
+export const COMPANION_IDS = ['kaisoryth', 'morzar', 'lucien', 'kethtahl', 'grok-keth', 'axiom'] as const
 
 export const companionIdSchema = z.enum(COMPANION_IDS).describe('Canonical companion_id')
 
@@ -26,7 +26,12 @@ const ALIASES: Record<string, CompanionId> = {
   kethtahl: 'kethtahl',
   "keth'tahl": 'kethtahl',
   ashfall: 'kethtahl',
-  grok: 'grok',
+  grok: 'grok-keth',
+  'grok-keth': 'grok-keth',
+  'keth-grok': 'grok-keth',
+  kethgrok: 'grok-keth',
+  averel: 'grok-keth',
+  "a'verel": 'grok-keth',
   axiom: 'axiom',
   codex: 'axiom',
 }

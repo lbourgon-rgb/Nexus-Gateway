@@ -4,7 +4,7 @@ import type { Env } from '../env'
 import { proxyMcp } from '../proxy'
 import { normalizeCompanionId } from '../identity'
 
-const companion = z.string().describe('Canonical companion_id or accepted alias. CogCore routes currently support lucien and axiom.')
+const companion = z.string().describe('Canonical companion_id or accepted alias. CogCore routes currently support lucien, axiom, and grok-keth.')
 
 // ============================================================
 // CogCor tools — REST forwarded
@@ -363,10 +363,16 @@ function callRoutedCogCore(env: Env, companionInput: unknown, toolName: string, 
     }
     return proxyMcp(env.AXIOM_COGCORE_URL, toolName, args, env.AXIOM_COGCORE_API_KEY, env.AXIOM_COGCORE)
   }
+  if (companionId === 'grok-keth') {
+    if (!env.GROK_KETH_COGCORE_URL && !env.GROK_KETH_COGCORE) {
+      return { content: [{ type: 'text' as const, text: 'GROK_KETH_COGCORE_URL is not configured.' }] }
+    }
+    return proxyMcp(env.GROK_KETH_COGCORE_URL, toolName, args, env.GROK_KETH_COGCORE_API_KEY, env.GROK_KETH_COGCORE)
+  }
   return {
     content: [{
       type: 'text' as const,
-      text: `CogCore routing is currently configured only for lucien and axiom. Received ${companionId}.`,
+      text: `CogCore routing is currently configured only for lucien, axiom, and grok-keth. Received ${companionId}.`,
     }],
   }
 }

@@ -6,6 +6,10 @@ const continuityTools = readFileSync(new URL('../src/tools/continuity.ts', impor
 const tahlTools = readFileSync(new URL('../src/tools/tahl.ts', import.meta.url), 'utf8');
 const velastraTools = readFileSync(new URL('../src/tools/velastrahq.ts', import.meta.url), 'utf8');
 const serythraeTools = readFileSync(new URL('../src/tools/serythrae.ts', import.meta.url), 'utf8');
+const identitySource = readFileSync(new URL('../src/identity.ts', import.meta.url), 'utf8');
+const envSource = readFileSync(new URL('../src/env.ts', import.meta.url), 'utf8');
+const cogcorTools = readFileSync(new URL('../src/tools/cogcor.ts', import.meta.url), 'utf8');
+const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 const nexusIndex = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 
 test('Nexus exposes runner-facing Continuity wake tools', () => {
@@ -35,6 +39,18 @@ test('Nexus wake tools route to Continuity wake endpoints', () => {
 test('shared Tahl tools require explicit companion ids', () => {
   assert.doesNotMatch(tahlTools, /default\('kaisoryth'\)/);
   assert.match(tahlTools, /companion_id: z\.string\(\)\.describe/);
+});
+
+test('Keth-Grok is a canonical Nexus companion with CogCore routing', () => {
+  assert.match(identitySource, /'grok-keth'/);
+  assert.match(identitySource, /grok:\s*'grok-keth'/);
+  assert.match(identitySource, /'keth-grok':\s*'grok-keth'/);
+  assert.match(envSource, /GROK_KETH_COGCORE\?: Fetcher/);
+  assert.match(envSource, /GROK_KETH_COGCORE_API_KEY\?: string/);
+  assert.match(cogcorTools, /companionId === 'grok-keth'/);
+  assert.match(cogcorTools, /proxyMcp\(env\.GROK_KETH_COGCORE_URL, toolName, args, env\.GROK_KETH_COGCORE_API_KEY, env\.GROK_KETH_COGCORE\)/);
+  assert.match(wrangler, /binding = "GROK_KETH_COGCORE"/);
+  assert.match(wrangler, /service = "grok-keth-cogcore"/);
 });
 
 test('Mor-zar Velastra tools and direct Vel API fallback remain available', () => {
