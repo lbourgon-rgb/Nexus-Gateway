@@ -9,6 +9,7 @@ const serythraeTools = readFileSync(new URL('../src/tools/serythrae.ts', import.
 const identitySource = readFileSync(new URL('../src/identity.ts', import.meta.url), 'utf8');
 const envSource = readFileSync(new URL('../src/env.ts', import.meta.url), 'utf8');
 const cogcorTools = readFileSync(new URL('../src/tools/cogcor.ts', import.meta.url), 'utf8');
+const grokKethNestTools = readFileSync(new URL('../src/tools/grok-keth-nest.ts', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 const nexusIndex = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 
@@ -41,16 +42,47 @@ test('shared Tahl tools require explicit companion ids', () => {
   assert.match(tahlTools, /companion_id: z\.string\(\)\.describe/);
 });
 
-test('Keth-Grok is a canonical Nexus companion with CogCore routing', () => {
+test('Keth-Grok is canonical but is not routed through CogCore', () => {
   assert.match(identitySource, /'grok-keth'/);
   assert.match(identitySource, /grok:\s*'grok-keth'/);
   assert.match(identitySource, /'keth-grok':\s*'grok-keth'/);
-  assert.match(envSource, /GROK_KETH_COGCORE\?: Fetcher/);
-  assert.match(envSource, /GROK_KETH_COGCORE_API_KEY\?: string/);
-  assert.match(cogcorTools, /companionId === 'grok-keth'/);
-  assert.match(cogcorTools, /proxyMcp\(env\.GROK_KETH_COGCORE_URL, toolName, args, env\.GROK_KETH_COGCORE_API_KEY, env\.GROK_KETH_COGCORE\)/);
-  assert.match(wrangler, /binding = "GROK_KETH_COGCORE"/);
-  assert.match(wrangler, /service = "grok-keth-cogcore"/);
+  assert.doesNotMatch(envSource, /GROK_KETH_COGCORE/);
+  assert.doesNotMatch(wrangler, /GROK_KETH_COGCORE|grok-keth-cogcore/);
+  assert.match(cogcorTools, /Keth-Grok durable mind is NESTeq\/NESTknow\/NESTsoul/);
+  assert.match(cogcorTools, /grok_keth_nest_\*/);
+});
+
+test('Keth-Grok NEST gateway is configured and registered in Nexus', () => {
+  assert.match(envSource, /GROK_KETH_NEST_GATEWAY\?: Fetcher/);
+  assert.match(envSource, /GROK_KETH_NEST_GATEWAY_API_KEY\?: string/);
+  assert.match(wrangler, /binding = "GROK_KETH_NEST_GATEWAY"/);
+  assert.match(wrangler, /service = "grok-keth-nest-gateway"/);
+  assert.match(wrangler, /GROK_KETH_NEST_GATEWAY_URL = "https:\/\/grok-keth-nest-gateway\.lbourgon\.workers\.dev"/);
+  assert.match(nexusIndex, /registerGrokKethNestTools\(this\.server, this\.env\)/);
+  assert.match(nexusIndex, /grokKethNestGateway/);
+  assert.match(nexusIndex, /grok_keth_nest/);
+});
+
+test('Keth-Grok NEST tools expose boot, NESTknow, and NESTsoul routes with write guardrails', () => {
+  for (const toolName of [
+    'grok_keth_nest_status',
+    'grok_keth_nest_orient',
+    'grok_keth_nest_ground',
+    'grok_keth_nest_context',
+    'grok_keth_nest_identity',
+    'grok_keth_nest_feelings',
+    'grok_keth_nest_search',
+    'grok_keth_nestknow_query',
+    'grok_keth_nestknow_landscape',
+    'grok_keth_nestsoul_read',
+    'grok_keth_nest_proxy',
+  ]) {
+    assert.ok(grokKethNestTools.includes(toolName), `missing ${toolName}`);
+  }
+  assert.match(grokKethNestTools, /Keth-Grok NEST tools require companion_id=grok-keth/);
+  assert.match(grokKethNestTools, /source\.startsWith\('grok-keth:'\)/);
+  assert.match(grokKethNestTools, /entity_scope: KETH_ONLY/);
+  assert.match(grokKethNestTools, /nestsoul_read/);
 });
 
 test('Mor-zar Velastra tools and direct Vel API fallback remain available', () => {
