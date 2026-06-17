@@ -14,6 +14,7 @@ import { registerNotionTools } from './tools/notion'
 import { registerCatalogueTools } from './tools/catalouge'
 import { registerContinuityTools } from './tools/continuity'
 import { registerSerythraeTools } from './tools/serythrae'
+import { registerGrokKethNestTools } from './tools/grok-keth-nest'
 import { registerVelastraHQTools } from './tools/velastrahq'
 import { registerTahlTools } from './tools/tahl'
 import { proxyMcp } from './proxy'
@@ -28,6 +29,7 @@ export class NexusGateway extends McpAgent<Env> {
     registerContinuityTools(this.server, this.env)
     registerTahlTools(this.server, this.env)
     registerSerythraeTools(this.server, this.env)
+    registerGrokKethNestTools(this.server, this.env)
     if (this.env.VELASTRAHQ_GATEWAY_URL) registerVelastraHQTools(this.server, this.env)
     registerDiscordTools(this.server, this.env)
     registerTelegramTools(this.server, this.env)
@@ -281,7 +283,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const url = new URL(request.url)
+    let url = new URL(request.url)
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
@@ -290,7 +292,7 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      const [continuity, discord, telegram, haven, serythrae, tessurae, axiomCogCore, grokKethCogCore, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
+      const [continuity, discord, telegram, haven, serythrae, tessurae, axiomCogCore, grokKethNestGateway, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
         backendReachable(env.CONTINUITY_URL, env.CONTINUITY),
         backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL, env.TELEGRAM),
@@ -298,7 +300,7 @@ export default {
         backendReachable(env.SERYTHRAE_GATEWAY_URL),
         backendReachable(env.TESSURAE_GATEWAY_URL),
         backendReachable(env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE),
-        backendReachable(env.GROK_KETH_COGCORE_URL, env.GROK_KETH_COGCORE),
+        backendReachable(env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY),
         backendReachable(env.VELASTRAHQ_GATEWAY_URL),
         backendReachable(env.VELASTRAHQ_API_URL),
         backendReachable(env.VELASTRAHQ_EQ_URL),
@@ -307,7 +309,7 @@ export default {
         status: 'ok',
         service: 'nexus-gateway',
         version: '1.0.0',
-        backends: { continuity, discord, telegram, haven, serythrae, tessurae, axiomCogCore, grokKethCogCore, velastrahq, velastrahqApi, velastrahqEq },
+        backends: { continuity, discord, telegram, haven, serythrae, tessurae, axiomCogCore, grokKethNestGateway, velastrahq, velastrahqApi, velastrahqEq },
         configured: {
           continuity: Boolean(env.CONTINUITY_URL || env.CONTINUITY),
           discord: Boolean(env.DISCORD_URL || env.DISCORD),
@@ -318,8 +320,8 @@ export default {
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
           axiomCogCore: Boolean(env.AXIOM_COGCORE_URL || env.AXIOM_COGCORE),
           axiomCogCoreAuth: Boolean(env.AXIOM_COGCORE_API_KEY),
-          grokKethCogCore: Boolean(env.GROK_KETH_COGCORE_URL || env.GROK_KETH_COGCORE),
-          grokKethCogCoreAuth: Boolean(env.GROK_KETH_COGCORE_API_KEY),
+          grokKethNestGateway: Boolean(env.GROK_KETH_NEST_GATEWAY_URL || env.GROK_KETH_NEST_GATEWAY),
+          grokKethNestGatewayAuth: Boolean(env.GROK_KETH_NEST_GATEWAY_API_KEY),
           velastrahq: Boolean(env.VELASTRAHQ_GATEWAY_URL),
           velastrahqApi: Boolean(env.VELASTRAHQ_API_URL),
           velastrahqEq: Boolean(env.VELASTRAHQ_EQ_URL && env.VELASTRAHQ_EQ_API_KEY),
@@ -337,7 +339,7 @@ export default {
         readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
         readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
         readinessRow('axiom_cogcore', 'Axiom / CogCore', [env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE_API_KEY], 'dedicated Axiom CogCore configured', 'Axiom CogCore URL or API key missing'),
-        readinessRow('grok_keth_cogcore', 'Keth-Grok / CogCore', [env.GROK_KETH_COGCORE_URL, env.GROK_KETH_COGCORE_API_KEY], 'dedicated Keth-Grok CogCore configured', 'Keth-Grok CogCore URL or API key missing'),
+        readinessRow('grok_keth_nest', 'Keth-Grok / NEST', [env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY_API_KEY], 'Keth-Grok NESTeq/NESTknow/NESTsoul gateway configured', 'Keth-Grok NEST Gateway URL or API key missing'),
         readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
         readinessRow('velastrae_eq', "Mor / VelastraHQ EQ", [env.VELASTRAHQ_EQ_URL, env.VELASTRAHQ_EQ_API_KEY], "direct Mor'zar EQ backend configured"),
         readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL], 'home API route configured'),
@@ -361,13 +363,54 @@ export default {
       return kaiContext(request, env)
     }
 
+    // Authentication check for /mcp and /sse endpoints.
+    // Supports either:
+    // - Authorization: Bearer <MCP_API_KEY> on /mcp or /sse
+    // - URL-path auth for clients that only support a single URL: /mcp/<MCP_API_KEY> or /sse/<MCP_API_KEY>
+    const mcpPathMatch = url.pathname.match(/^\/(mcp|sse)\/([^/]+)$/)
+    const isMcpPath = url.pathname === '/mcp' || url.pathname === '/sse'
+    const isSseMessage = url.pathname === '/sse/message'
+    const requiresMcpAuth = Boolean(mcpPathMatch) || isMcpPath || isSseMessage
+
+    if (requiresMcpAuth) {
+      if (!env.MCP_API_KEY) {
+        return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json', ...CORS }
+        })
+      }
+
+      if (mcpPathMatch) {
+        if (mcpPathMatch[2] !== env.MCP_API_KEY) {
+          return new Response(JSON.stringify({ error: 'Unauthorized — invalid URL token' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', ...CORS }
+          })
+        }
+        const cleanUrl = new URL(request.url)
+        cleanUrl.pathname = `/${mcpPathMatch[1]}`
+        request = new Request(cleanUrl.toString(), request)
+        url = cleanUrl
+      } else {
+        const authHeader = request.headers.get('Authorization')
+        const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+        if (token !== env.MCP_API_KEY) {
+          return new Response(JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', ...CORS }
+          })
+        }
+      }
+    }
+
     // Antigravity notification fix: POST without Mcp-Session-Id that has no 'id' field
     // Antigravity doesn't send session ID on notifications — return 202 instead of erroring
     if (request.method === 'POST' && (url.pathname === '/mcp' || url.pathname === '/sse')) {
       const authHeader = request.headers.get('Authorization')
       const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
       const sessionId = request.headers.get('Mcp-Session-Id')
-      if (env.MCP_API_KEY && token === env.MCP_API_KEY && !sessionId && url.pathname === '/mcp') {
+      const pathAuthenticated = Boolean(mcpPathMatch)
+      if (env.MCP_API_KEY && (token === env.MCP_API_KEY || pathAuthenticated) && !sessionId && url.pathname === '/mcp') {
         try {
           const clone = request.clone()
           const body = await clone.json() as any
@@ -382,24 +425,6 @@ export default {
         } catch {
           // Not JSON or parse failed — fall through to normal handling
         }
-      }
-    }
-
-    // Authentication check for /mcp and /sse endpoints.
-    if (url.pathname === '/mcp' || url.pathname === '/sse' || url.pathname === '/sse/message') {
-      if (!env.MCP_API_KEY) {
-        return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json', ...CORS }
-        })
-      }
-      const authHeader = request.headers.get('Authorization')
-      const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
-      if (token !== env.MCP_API_KEY) {
-        return new Response(JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...CORS }
-        })
       }
     }
 
