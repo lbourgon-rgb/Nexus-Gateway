@@ -44,6 +44,17 @@ export interface Env {
   KAI_DISCORD_DELIVERY_ENABLED?: string
   KAI_CONTINUITY_URL?: string
   KAI_TAHL_URL?: string
+  KAI_TEXT_MODEL?: string
+  KAI_BACKUP_TEXT_MODEL?: string
+  KAI_VISION_PROVIDER?: string
+  KAI_VISION_MODEL?: string
+  KAI_IMAGE_PROVIDER?: string
+  KAI_IMAGE_MODEL?: string
+  KAI_TTS_PROVIDER?: string
+  KAI_TTS_VOICE_ID?: string
+  KAI_JANITOR_PROVIDER?: string
+  KAI_JANITOR_MODEL?: string
+  KAI_JANITOR_URL?: string
 }
 
 export type CompanionId = 'kaisoryth' | 'morzar' | 'lucien' | 'kethtahl' | 'grok-keth' | 'axiom'

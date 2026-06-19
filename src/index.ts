@@ -128,6 +128,60 @@ interface SummaryRow {
   last_checked: string
 }
 
+interface KaiRunnerAttachment {
+  id?: string
+  filename?: string
+  content_type?: string
+  size?: number
+  url?: string
+  proxy_url?: string
+  width?: number
+  height?: number
+}
+
+interface KaiDiscordEnvelope {
+  guild_id?: string
+  channel_id?: string
+  thread_id?: string
+  message_id?: string
+  author_id?: string
+  author_username?: string
+  timestamp?: string
+  content: string
+  mentions?: string[]
+  attachments: KaiRunnerAttachment[]
+  trigger?: 'listener' | 'mention' | 'manual' | 'preview' | 'unknown'
+}
+
+interface KaiRunnerContextPacket {
+  companion_id: 'kaisoryth'
+  message: string
+  channel_id?: string
+  envelope: KaiDiscordEnvelope
+  context: Record<string, unknown>
+  context_sources: string[]
+}
+
+interface KaiRunnerResult {
+  ok: boolean
+  mode: 'dry_run' | 'delivery_blocked'
+  generated: false
+  runner_enabled: boolean
+  delivery_enabled: boolean
+  companion_id: 'kaisoryth'
+  source: 'nexus-gateway'
+  accepted: boolean
+  should_respond: boolean
+  response: string | null
+  delivery_blocked_reason: string
+  envelope: KaiDiscordEnvelope
+  model_lanes: Record<string, unknown>
+  context_sources: string[]
+  context: Record<string, unknown>
+  tool_calls: Array<Record<string, unknown>>
+  memory_writes: Array<Record<string, unknown>>
+}
+
 function readinessRow(
   id: string,
   label: string,
@@ -159,6 +213,102 @@ function plannedRow(id: string, label: string, note = 'not built yet'): SummaryR
 function kaiCompanionId(env: Env): 'kaisoryth' {
   const configured = String(env.KAI_COMPANION_ID || 'kaisoryth').trim().toLowerCase()
   return configured === 'kaisoryth' ? 'kaisoryth' : 'kaisoryth'
+}
+
+function authToken(request: Request): string | null {
+  const authHeader = request.headers.get('Authorization')
+  return authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+}
+
+function unauthorizedResponse(): Response {
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  })
+}
+
+function authorizeMcpBearer(request: Request, env: Env): Response | null {
+  if (!env.MCP_API_KEY) return null
+  return authToken(request) === env.MCP_API_KEY ? null : unauthorizedResponse()
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function normalizeKaiAttachments(value: unknown): KaiRunnerAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      id: stringValue(item.id),
+      filename: stringValue(item.filename),
+      content_type: stringValue(item.content_type) || stringValue(item.contentType),
+      size: numberValue(item.size),
+      url: stringValue(item.url),
+      proxy_url: stringValue(item.proxy_url) || stringValue(item.proxyUrl),
+      width: numberValue(item.width),
+      height: numberValue(item.height),
+    }))
+}
+
+function normalizeKaiRunnerEnvelope(body: Record<string, unknown>): KaiDiscordEnvelope {
+  const source = body.envelope && typeof body.envelope === 'object' && !Array.isArray(body.envelope)
+    ? body.envelope as Record<string, unknown>
+    : body
+  const trigger = stringValue(source.trigger) || stringValue(body.trigger) || 'unknown'
+  return {
+    guild_id: stringValue(source.guild_id) || stringValue(source.guildId) || stringValue(body.guild_id),
+    channel_id: stringValue(source.channel_id) || stringValue(source.channelId) || stringValue(body.channel_id) || stringValue(body.channel),
+    thread_id: stringValue(source.thread_id) || stringValue(source.threadId) || stringValue(body.thread_id),
+    message_id: stringValue(source.message_id) || stringValue(source.messageId) || stringValue(body.message_id),
+    author_id: stringValue(source.author_id) || stringValue(source.authorId) || stringValue(body.author_id),
+    author_username: stringValue(source.author_username) || stringValue(source.authorUsername) || stringValue(body.author_username),
+    timestamp: stringValue(source.timestamp) || stringValue(body.timestamp),
+    content: stringValue(source.content) || stringValue(source.message) || stringValue(body.message) || '',
+    mentions: stringList(source.mentions).length ? stringList(source.mentions) : stringList(body.mentions),
+    attachments: normalizeKaiAttachments(source.attachments || body.attachments),
+    trigger: trigger === 'listener' || trigger === 'mention' || trigger === 'manual' || trigger === 'preview' ? trigger : 'unknown',
+  }
+}
+
+function kaiRunnerModelLanes(env: Env): Record<string, unknown> {
+  return {
+    text: {
+      configured: Boolean(env.KAI_TEXT_MODEL),
+      model: env.KAI_TEXT_MODEL || null,
+      backup_model: env.KAI_BACKUP_TEXT_MODEL || null,
+    },
+    vision: {
+      configured: Boolean(env.KAI_VISION_PROVIDER && env.KAI_VISION_MODEL),
+      provider: env.KAI_VISION_PROVIDER || null,
+      model: env.KAI_VISION_MODEL || null,
+    },
+    image: {
+      configured: Boolean(env.KAI_IMAGE_PROVIDER && env.KAI_IMAGE_MODEL),
+      provider: env.KAI_IMAGE_PROVIDER || null,
+      model: env.KAI_IMAGE_MODEL || null,
+    },
+    tts: {
+      configured: Boolean(env.KAI_TTS_PROVIDER && env.KAI_TTS_VOICE_ID),
+      provider: env.KAI_TTS_PROVIDER || null,
+      voice_configured: Boolean(env.KAI_TTS_VOICE_ID),
+    },
+    janitor: {
+      enabled: Boolean(env.KAI_JANITOR_PROVIDER && env.KAI_JANITOR_PROVIDER !== 'disabled'),
+      provider: env.KAI_JANITOR_PROVIDER || 'disabled',
+      model: env.KAI_JANITOR_MODEL || null,
+    },
+  }
 }
 
 function overallStatus(rows: SummaryRow[]): SummaryStatus {
@@ -220,6 +370,35 @@ async function safeKaiMindTool(env: Env, label: string, tool: string, args: Reco
   }
 }
 
+async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiRunnerContextPacket> {
+  const companionId = kaiCompanionId(env)
+  const message = envelope.content
+  const channel = envelope.thread_id || envelope.channel_id
+  const contextEntries = await Promise.all([
+    safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
+    safeKaiMindTool(env, 'surface', 'thalamus_surface', {
+      companion: companionId,
+      message,
+      channel,
+      mode: 'auto',
+      max_results: 8,
+    }),
+    safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
+    safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
+    safeKaiMindTool(env, 'hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
+    safeKaiMindTool(env, 'recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+  ])
+
+  return {
+    companion_id: companionId,
+    message,
+    channel_id: channel,
+    envelope,
+    context: Object.fromEntries(contextEntries),
+    context_sources: contextEntries.map(([label]) => label),
+  }
+}
+
 async function kaiContext(request: Request, env: Env): Promise<Response> {
   if (!env.MCP_API_KEY) {
     return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
@@ -227,14 +406,8 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
       headers: { 'Content-Type': 'application/json', ...CORS },
     })
   }
-  const authHeader = request.headers.get('Authorization')
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
-  if (token !== env.MCP_API_KEY) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json', ...CORS },
-    })
-  }
+  const unauthorized = authorizeMcpBearer(request, env)
+  if (unauthorized) return unauthorized
 
   const body = request.method === 'POST' ? await request.json().catch(() => ({})) as Record<string, unknown> : {}
   const message = String(body.message || '')
@@ -287,10 +460,11 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   })
 }
 
-async function kaiRunnerPreview(request: Request, env: Env): Promise<Response> {
+async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   if (env.KAI_RUNNER_ENABLED !== 'true') {
     return new Response(JSON.stringify({
       ok: false,
+      route: '/api/kaisoryth/run',
       error: 'Kai runner is disabled. Set KAI_RUNNER_ENABLED=true only after the Nexus route is ready for supervised testing.',
       runner_enabled: false,
       delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
@@ -301,46 +475,44 @@ async function kaiRunnerPreview(request: Request, env: Env): Promise<Response> {
   }
 
   if (env.MCP_API_KEY) {
-    const authHeader = request.headers.get('Authorization')
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (token !== env.MCP_API_KEY) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...CORS },
-      })
-    }
+    const unauthorized = authorizeMcpBearer(request, env)
+    if (unauthorized) return unauthorized
   }
 
   const body = await request.json().catch(() => ({})) as Record<string, unknown>
-  const companionId = kaiCompanionId(env)
-  const message = String(body.message || '')
-  const channel = typeof body.channel_id === 'string' ? body.channel_id : undefined
-  const contextEntries = await Promise.all([
-    safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
-    safeKaiMindTool(env, 'surface', 'thalamus_surface', {
-      companion: companionId,
-      message,
-      channel,
-      mode: 'auto',
-      max_results: 8,
-    }),
-    safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
-    safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
-    safeKaiMindTool(env, 'recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
-  ])
-
-  return new Response(JSON.stringify({
+  const envelope = normalizeKaiRunnerEnvelope(body)
+  const contextPacket = await compileKaiRunnerContext(env, envelope)
+  const deliveryEnabled = env.KAI_DISCORD_DELIVERY_ENABLED === 'true'
+  const mode: KaiRunnerResult['mode'] = deliveryEnabled ? 'dry_run' : 'delivery_blocked'
+  const result: KaiRunnerResult = {
     ok: true,
-    mode: 'dry_run_preview',
+    mode,
     generated: false,
-    companion_id: companionId,
+    runner_enabled: true,
+    delivery_enabled: deliveryEnabled,
+    companion_id: contextPacket.companion_id,
     source: 'nexus-gateway',
-    delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
-    response: 'Nexus reached Kai NESTeq context in dry-run preview mode. Text generation is not enabled in this endpoint yet.',
-    context: Object.fromEntries(contextEntries),
-  }, null, 2), {
+    accepted: true,
+    should_respond: Boolean(envelope.content || envelope.attachments.length),
+    response: null,
+    delivery_blocked_reason: deliveryEnabled
+      ? 'Text generation is not implemented in this runner increment; delivery intentionally skipped.'
+      : 'KAI_DISCORD_DELIVERY_ENABLED is not true.',
+    envelope,
+    model_lanes: kaiRunnerModelLanes(env),
+    context_sources: contextPacket.context_sources,
+    context: contextPacket.context,
+    tool_calls: [],
+    memory_writes: [],
+  }
+
+  return new Response(JSON.stringify(result, null, 2), {
     headers: { 'Content-Type': 'application/json', ...CORS },
   })
+}
+
+async function kaiRunnerPreview(request: Request, env: Env): Promise<Response> {
+  return kaiRunnerRun(request, env)
 }
 
 export default {
@@ -442,6 +614,10 @@ export default {
 
     if (url.pathname === '/api/kaisoryth/context' && (request.method === 'POST' || request.method === 'GET')) {
       return kaiContext(request, env)
+    }
+
+    if (url.pathname === '/api/kaisoryth/run' && request.method === 'POST') {
+      return kaiRunnerRun(request, env)
     }
 
     if (url.pathname === '/api/kaisoryth/runner-preview' && request.method === 'POST') {
