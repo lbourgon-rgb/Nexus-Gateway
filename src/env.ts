@@ -39,6 +39,8 @@ export interface Env {
   VELASTRAHQ_GATEWAY_API_KEY?: string
   VELASTRAHQ_EQ_API_KEY?: string
   CATALOUGE_TOKEN?: string
+  OPENROUTER_API_KEY?: string
+  OPENROUTER_BASE_URL?: string
   KAI_COMPANION_ID?: string
   KAI_RUNNER_ENABLED?: string
   KAI_DISCORD_DELIVERY_ENABLED?: string

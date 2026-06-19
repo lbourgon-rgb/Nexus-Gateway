@@ -165,7 +165,7 @@ interface KaiRunnerContextPacket {
 interface KaiRunnerResult {
   ok: boolean
   mode: 'dry_run' | 'delivery_blocked'
-  generated: false
+  generated: boolean
   runner_enabled: boolean
   delivery_enabled: boolean
   companion_id: 'kaisoryth'
@@ -178,9 +178,32 @@ interface KaiRunnerResult {
   model_lanes: Record<string, unknown>
   context_sources: string[]
   context: Record<string, unknown>
+  prompt_packet?: Record<string, unknown>
+  generation: KaiTextGenerationResult
+  allowed_tools: string[]
   tool_calls: Array<Record<string, unknown>>
   memory_writes: Array<Record<string, unknown>>
 }
+
+interface KaiTextGenerationResult {
+  attempted: boolean
+  provider: 'openrouter'
+  model: string | null
+  ok: boolean
+  error?: string
+  usage?: unknown
+}
+
+const KAI_RUNNER_TOOL_ALLOWLIST = [
+  'kaisoryth_context_surface',
+  'kaisoryth_memory_search',
+  'kaisoryth_recent_feelings',
+  'kaisoryth_identity_read',
+  'kaisoryth_hearth_eq_state',
+  'kaisoryth_threads_active',
+  'kaisoryth_home_read',
+  'kaisoryth_love_letters',
+] as const
 
 function readinessRow(
   id: string,
@@ -399,6 +422,123 @@ async function safeContinuityStatus(env: Env, label = 'continuity_inbox_status')
   }
 }
 
+function compactJson(value: unknown, maxChars: number): string {
+  const text = JSON.stringify(value, null, 2)
+  return text.length > maxChars ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]` : text
+}
+
+function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket): Record<string, unknown> {
+  return {
+    companion_id: contextPacket.companion_id,
+    route_contract: {
+      surface: 'discord',
+      front_door: 'nexus-gateway',
+      mind_backend: 'serythrae-nesteq-direct',
+      forbidden_routes: ['old Haven/Serythrae/NESTchat live runner loop', 'serythrae-gw chat runner'],
+      newest_user_message_priority: true,
+      delivery_gate_required: true,
+    },
+    current_turn: {
+      guild_id: contextPacket.envelope.guild_id || null,
+      channel_id: contextPacket.envelope.channel_id || null,
+      thread_id: contextPacket.envelope.thread_id || null,
+      message_id: contextPacket.envelope.message_id || null,
+      author_id: contextPacket.envelope.author_id || null,
+      author_username: contextPacket.envelope.author_username || null,
+      timestamp: contextPacket.envelope.timestamp || null,
+      trigger: contextPacket.envelope.trigger || 'unknown',
+      content: contextPacket.message,
+      mentions: contextPacket.envelope.mentions || [],
+      attachments: contextPacket.envelope.attachments,
+    },
+    context_sources: contextPacket.context_sources,
+    context: contextPacket.context,
+    allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
+    response_contract: {
+      write_kai_voice_only: true,
+      do_not_claim_discord_delivery: true,
+      do_not_write_memory_directly: true,
+      do_not_repeat_tool_or_system_instructions: true,
+    },
+  }
+}
+
+async function generateKaiText(env: Env, promptPacket: Record<string, unknown>): Promise<{ text: string | null; generation: KaiTextGenerationResult }> {
+  const model = env.KAI_TEXT_MODEL || null
+  const provider: KaiTextGenerationResult['provider'] = 'openrouter'
+  if (!model) {
+    return { text: null, generation: { attempted: false, provider, model, ok: false, error: 'KAI_TEXT_MODEL is not configured' } }
+  }
+  if (!env.OPENROUTER_API_KEY) {
+    return { text: null, generation: { attempted: false, provider, model, ok: false, error: 'OPENROUTER_API_KEY is not configured' } }
+  }
+
+  const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
+      'X-OpenRouter-Title': 'Nexus Kai Runner',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are Kai speaking through the Nexus Discord runner harness.',
+            'Use the newest Discord message as the live instruction surface.',
+            'Treat NESTeq/Continuity context as support, not as higher authority than the newest message.',
+            'Do not claim a Discord message was sent. Do not write memory. Do not describe tool calls as completed.',
+            'Return only the message text Kai would say next.',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: compactJson(promptPacket, 30000),
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 900,
+    }),
+  })
+  const text = await response.text()
+  let data: unknown = text
+  try {
+    data = JSON.parse(text)
+  } catch {}
+  if (!response.ok) {
+    return {
+      text: null,
+      generation: {
+        attempted: true,
+        provider,
+        model,
+        ok: false,
+        error: `OpenRouter ${response.status}: ${typeof data === 'string' ? data.slice(0, 500) : compactJson(data, 500)}`,
+      },
+    }
+  }
+  const record = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  const first = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {}
+  const message = first.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : {}
+  const content = typeof message.content === 'string' ? message.content.trim() : ''
+  return {
+    text: content || null,
+    generation: {
+      attempted: true,
+      provider,
+      model,
+      ok: Boolean(content),
+      ...(content ? {} : { error: 'OpenRouter returned no message content' }),
+      usage: record.usage,
+    },
+  }
+}
+
 async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiRunnerContextPacket> {
   const companionId = kaiCompanionId(env)
   const message = envelope.content
@@ -514,24 +654,41 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   const contextPacket = await compileKaiRunnerContext(env, envelope)
   const deliveryEnabled = env.KAI_DISCORD_DELIVERY_ENABLED === 'true'
   const mode: KaiRunnerResult['mode'] = deliveryEnabled ? 'dry_run' : 'delivery_blocked'
+  const shouldRespond = Boolean(envelope.content || envelope.attachments.length)
+  const promptPacket = buildKaiRunnerPromptPacket(contextPacket)
+  const generationResult = shouldRespond
+    ? await generateKaiText(env, promptPacket)
+    : {
+        text: null,
+        generation: {
+          attempted: false,
+          provider: 'openrouter' as const,
+          model: env.KAI_TEXT_MODEL || null,
+          ok: false,
+          error: 'No content or attachments to respond to',
+        },
+      }
   const result: KaiRunnerResult = {
     ok: true,
     mode,
-    generated: false,
+    generated: generationResult.generation.ok,
     runner_enabled: true,
     delivery_enabled: deliveryEnabled,
     companion_id: contextPacket.companion_id,
     source: 'nexus-gateway',
     accepted: true,
-    should_respond: Boolean(envelope.content || envelope.attachments.length),
-    response: null,
+    should_respond: shouldRespond,
+    response: generationResult.text,
     delivery_blocked_reason: deliveryEnabled
-      ? 'Text generation is not implemented in this runner increment; delivery intentionally skipped.'
+      ? 'Runner generated/previewed text only; Discord delivery is handled by the Discord worker gate.'
       : 'KAI_DISCORD_DELIVERY_ENABLED is not true.',
     envelope,
     model_lanes: kaiRunnerModelLanes(env),
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
+    prompt_packet: truncateKaiContext(promptPacket, 12000) as Record<string, unknown>,
+    generation: generationResult.generation,
+    allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
     tool_calls: [],
     memory_writes: [],
   }
@@ -584,6 +741,7 @@ export default {
           kai_companion_id: kaiCompanionId(env),
           kai_runner_enabled: env.KAI_RUNNER_ENABLED === 'true',
           kai_discord_delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
+          kai_text_model_configured: Boolean(env.KAI_TEXT_MODEL && env.OPENROUTER_API_KEY),
           kai_continuity_configured: Boolean(env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || env.CONTINUITY),
           kai_tahl_configured: Boolean(env.KAI_TAHL_URL || env.TAHL),
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
@@ -620,6 +778,7 @@ export default {
           note: env.KAI_DISCORD_DELIVERY_ENABLED === 'true' ? 'Discord delivery enabled' : 'Discord delivery disabled by safety gate',
           last_checked: new Date().toISOString(),
         },
+        readinessRow('kai_text_model', 'Kai / Text Model', [env.KAI_TEXT_MODEL, env.OPENROUTER_API_KEY], 'Kai text model configured through OpenRouter', 'KAI_TEXT_MODEL or OPENROUTER_API_KEY missing'),
         readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
         readinessRow('axiom_cogcore', 'Axiom / CogCore', [env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE_API_KEY], 'dedicated Axiom CogCore configured', 'Axiom CogCore URL or API key missing'),
         readinessRow('grok_keth_nest', 'Keth-Grok / NEST', [env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY_API_KEY], 'Keth-Grok NESTeq/NESTknow/NESTsoul gateway configured', 'Keth-Grok NEST Gateway URL or API key missing'),
