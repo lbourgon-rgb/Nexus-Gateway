@@ -64,6 +64,8 @@ VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
 # - VELASTRAHQ_EQ_API_KEY authorizes direct Mor'zar/VelastraHQ EQ MCP calls.
 # - CATALOUGE_TOKEN authorizes private Catalouge calls, if CATALOUGE_URL is set.
 # - OPENROUTER_API_KEY authorizes Kai runner text/vision/image model calls.
+# - ELEVENLABS_API_KEY authorizes Kai runner TTS when KAI_TTS_PROVIDER=elevenlabs.
 # - KAI_JANITOR_URL points to an optional local/Ollama janitor endpoint when KAI_JANITOR_PROVIDER=ollama.
 # - KAI_VISION_PROVIDER/KAI_VISION_MODEL enable optional image attachment summarization.
 # - KAI_IMAGE_PROVIDER/KAI_IMAGE_MODEL enable optional image generation; OPENROUTER_API_KEY required for openrouter.
+# - KAI_TTS_PROVIDER/KAI_TTS_VOICE_ID/KAI_TTS_MODEL enable optional voice synthesis; audio is not delivered unless the Discord gate does it.

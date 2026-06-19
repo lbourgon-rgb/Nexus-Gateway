@@ -181,6 +181,7 @@ interface KaiRunnerResult {
   prompt_packet?: Record<string, unknown>
   vision: KaiVisionResult
   image_generation: KaiImageGenerationResult
+  tts: KaiTtsResult
   janitor: KaiJanitorResult
   generation: KaiTextGenerationResult
   allowed_tools: string[]
@@ -222,6 +223,24 @@ interface KaiImageGenerationResult {
   ok: boolean
   prompt: string | null
   images: KaiGeneratedImage[]
+  error?: string
+}
+
+interface KaiTtsAudioMetadata {
+  content_type: string
+  byte_length: number
+  output_format: string
+}
+
+interface KaiTtsResult {
+  attempted: boolean
+  enabled: boolean
+  provider: 'disabled' | 'elevenlabs' | string
+  model: string | null
+  voice_id_configured: boolean
+  ok: boolean
+  text_chars: number
+  audio: KaiTtsAudioMetadata | null
   error?: string
 }
 
@@ -385,6 +404,7 @@ function kaiRunnerModelLanes(env: Env): Record<string, unknown> {
       configured: Boolean(env.KAI_TTS_PROVIDER && env.KAI_TTS_VOICE_ID),
       provider: env.KAI_TTS_PROVIDER || null,
       voice_configured: Boolean(env.KAI_TTS_VOICE_ID),
+      model: env.KAI_TTS_MODEL || 'eleven_multilingual_v2',
     },
     janitor: {
       enabled: Boolean(env.KAI_JANITOR_PROVIDER && env.KAI_JANITOR_PROVIDER !== 'disabled'),
@@ -555,6 +575,27 @@ function extractKaiImagePrompt(body: Record<string, unknown>, envelope: KaiDisco
   if (explicitFlag && content) return content
   if (/\b(generate|create|draw|make|render)\b[\s\S]{0,120}\b(image|picture|art|illustration|photo)\b/i.test(content)) return content
   if (/\b(image|picture|art|illustration|photo)\b[\s\S]{0,120}\b(generate|create|draw|make|render)\b/i.test(content)) return content
+  return null
+}
+
+function extractKaiTtsText(body: Record<string, unknown>, envelope: KaiDiscordEnvelope, generatedText: string | null): string | null {
+  const explicitText =
+    stringValue(body.tts_text) ||
+    stringValue(body.ttsText) ||
+    stringValue(body.voice_text) ||
+    stringValue(body.voiceText)
+  if (explicitText) return explicitText.slice(0, 5000)
+
+  const explicitFlag =
+    body.tts === true ||
+    body.generate_tts === true ||
+    body.generateTts === true ||
+    body.voice === true ||
+    body.speak === true
+  const content = envelope.content.trim()
+  const spokenRequest = /\b(tts|voice|spoken|speak|say this out loud|read this aloud)\b/i.test(content)
+  if ((explicitFlag || spokenRequest) && generatedText) return generatedText.slice(0, 5000)
+  if (explicitFlag && content) return content.slice(0, 5000)
   return null
 }
 
@@ -992,6 +1033,96 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
   }
 }
 
+async function runKaiTts(env: Env, envelope: KaiDiscordEnvelope, body: Record<string, unknown>, generatedText: string | null): Promise<KaiTtsResult> {
+  const provider = (env.KAI_TTS_PROVIDER || 'disabled').trim().toLowerCase()
+  const enabled = Boolean(provider && provider !== 'disabled')
+  const model = env.KAI_TTS_MODEL || 'eleven_multilingual_v2'
+  const voiceId = env.KAI_TTS_VOICE_ID || ''
+  const ttsText = extractKaiTtsText(body, envelope, generatedText)
+  const outputFormat = 'mp3_44100_128'
+
+  if (!enabled) {
+    return {
+      attempted: false,
+      enabled: false,
+      provider: 'disabled',
+      model,
+      voice_id_configured: Boolean(voiceId),
+      ok: false,
+      text_chars: ttsText?.length || 0,
+      audio: null,
+      error: ttsText ? 'TTS lane disabled' : undefined,
+    }
+  }
+  if (provider !== 'elevenlabs') {
+    return {
+      attempted: false,
+      enabled: true,
+      provider,
+      model,
+      voice_id_configured: Boolean(voiceId),
+      ok: false,
+      text_chars: ttsText?.length || 0,
+      audio: null,
+      error: `Unsupported TTS provider: ${provider}`,
+    }
+  }
+  if (!voiceId) {
+    return { attempted: false, enabled: true, provider, model, voice_id_configured: false, ok: false, text_chars: ttsText?.length || 0, audio: null, error: 'KAI_TTS_VOICE_ID is not configured' }
+  }
+  if (!env.ELEVENLABS_API_KEY) {
+    return { attempted: false, enabled: true, provider, model, voice_id_configured: true, ok: false, text_chars: ttsText?.length || 0, audio: null, error: 'ELEVENLABS_API_KEY is not configured' }
+  }
+  if (!ttsText) {
+    return { attempted: false, enabled: true, provider, model, voice_id_configured: true, ok: true, text_chars: 0, audio: null }
+  }
+
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(outputFormat)}`, {
+    method: 'POST',
+    headers: {
+      'xi-api-key': env.ELEVENLABS_API_KEY,
+      'Content-Type': 'application/json',
+      'Accept': 'audio/mpeg',
+    },
+    body: JSON.stringify({
+      text: ttsText,
+      model_id: model,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '')
+    return {
+      attempted: true,
+      enabled: true,
+      provider,
+      model,
+      voice_id_configured: true,
+      ok: false,
+      text_chars: ttsText.length,
+      audio: null,
+      error: `ElevenLabs ${response.status}: ${errorText.slice(0, 500)}`,
+    }
+  }
+
+  const audio = await response.arrayBuffer()
+  return {
+    attempted: true,
+    enabled: true,
+    provider,
+    model,
+    voice_id_configured: true,
+    ok: audio.byteLength > 0,
+    text_chars: ttsText.length,
+    audio: {
+      content_type: response.headers.get('Content-Type') || 'audio/mpeg',
+      byte_length: audio.byteLength,
+      output_format: outputFormat,
+    },
+    ...(audio.byteLength > 0 ? {} : { error: 'ElevenLabs returned an empty audio body' }),
+  }
+}
+
 async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiRunnerContextPacket> {
   const companionId = kaiCompanionId(env)
   const message = envelope.content
@@ -1125,6 +1256,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
           error: 'No content or attachments to respond to',
         },
       }
+  const tts = await runKaiTts(env, envelope, body, generationResult.text)
   const result: KaiRunnerResult = {
     ok: true,
     mode,
@@ -1146,6 +1278,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
     prompt_packet: truncateKaiContext(promptPacket, 12000) as Record<string, unknown>,
     vision,
     image_generation: imageGeneration,
+    tts,
     janitor,
     generation: generationResult.generation,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
@@ -1206,6 +1339,8 @@ export default {
           kai_vision_configured: Boolean(env.KAI_VISION_PROVIDER === 'openrouter' && env.KAI_VISION_MODEL && env.OPENROUTER_API_KEY),
           kai_image_enabled: Boolean(env.KAI_IMAGE_PROVIDER && env.KAI_IMAGE_PROVIDER !== 'disabled'),
           kai_image_configured: Boolean(env.KAI_IMAGE_PROVIDER === 'openrouter' && env.KAI_IMAGE_MODEL && env.OPENROUTER_API_KEY),
+          kai_tts_enabled: Boolean(env.KAI_TTS_PROVIDER && env.KAI_TTS_PROVIDER !== 'disabled'),
+          kai_tts_configured: Boolean(env.KAI_TTS_PROVIDER === 'elevenlabs' && env.KAI_TTS_VOICE_ID && env.ELEVENLABS_API_KEY),
           kai_janitor_enabled: Boolean(env.KAI_JANITOR_PROVIDER && env.KAI_JANITOR_PROVIDER !== 'disabled'),
           kai_janitor_configured: env.KAI_JANITOR_PROVIDER === 'ollama'
             ? Boolean(env.KAI_JANITOR_MODEL && env.KAI_JANITOR_URL)
@@ -1267,6 +1402,17 @@ export default {
           note: !env.KAI_IMAGE_PROVIDER || env.KAI_IMAGE_PROVIDER === 'disabled'
             ? 'image generation disabled by default'
             : 'image generation configured through OpenRouter',
+          last_checked: new Date().toISOString(),
+        },
+        {
+          id: 'kai_tts',
+          label: 'Kai / TTS Voice',
+          status: !env.KAI_TTS_PROVIDER || env.KAI_TTS_PROVIDER === 'disabled'
+            ? 'not_configured'
+            : ((env.KAI_TTS_PROVIDER === 'elevenlabs' && env.KAI_TTS_VOICE_ID && env.ELEVENLABS_API_KEY) ? 'ok' : 'not_configured'),
+          note: !env.KAI_TTS_PROVIDER || env.KAI_TTS_PROVIDER === 'disabled'
+            ? 'TTS disabled by default'
+            : 'ElevenLabs TTS configured for explicit voice requests',
           last_checked: new Date().toISOString(),
         },
         {

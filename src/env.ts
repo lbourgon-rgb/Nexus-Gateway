@@ -41,6 +41,7 @@ export interface Env {
   CATALOUGE_TOKEN?: string
   OPENROUTER_API_KEY?: string
   OPENROUTER_BASE_URL?: string
+  ELEVENLABS_API_KEY?: string
   KAI_COMPANION_ID?: string
   KAI_RUNNER_ENABLED?: string
   KAI_DISCORD_DELIVERY_ENABLED?: string
@@ -54,6 +55,7 @@ export interface Env {
   KAI_IMAGE_MODEL?: string
   KAI_TTS_PROVIDER?: string
   KAI_TTS_VOICE_ID?: string
+  KAI_TTS_MODEL?: string
   KAI_JANITOR_PROVIDER?: string
   KAI_JANITOR_MODEL?: string
   KAI_JANITOR_URL?: string
