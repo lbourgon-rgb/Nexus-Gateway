@@ -156,6 +156,11 @@ function plannedRow(id: string, label: string, note = 'not built yet'): SummaryR
   }
 }
 
+function kaiCompanionId(env: Env): 'kaisoryth' {
+  const configured = String(env.KAI_COMPANION_ID || 'kaisoryth').trim().toLowerCase()
+  return configured === 'kaisoryth' ? 'kaisoryth' : 'kaisoryth'
+}
+
 function overallStatus(rows: SummaryRow[]): SummaryStatus {
   if (rows.some(row => row.status === 'offline')) return 'offline'
   if (rows.some(row => row.status === 'warn')) return 'warn'
@@ -234,6 +239,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   const body = request.method === 'POST' ? await request.json().catch(() => ({})) as Record<string, unknown> : {}
   const message = String(body.message || '')
   const channel = typeof body.channel === 'string' ? body.channel : undefined
+  const companionId = kaiCompanionId(env)
   const canonQuery = [
     message,
     "Kai Kal'thir Vel Vel'thira safeword intimacy recursive dialect husband partner identity",
@@ -241,7 +247,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   const contextEntries = await Promise.all([
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
     safeKaiMindTool(env, 'surface', 'thalamus_surface', {
-      companion: 'kaisoryth',
+      companion: companionId,
       message,
       channel,
       mode: 'auto',
@@ -261,7 +267,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
 
   return new Response(JSON.stringify({
     ok: true,
-    companion_id: 'kaisoryth',
+    companion_id: companionId,
     source: 'nexus-gateway',
     mind_backend: {
       preferred: env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY ? 'serythrae-mind-direct' : 'serythrae-gw-fallback',
@@ -276,6 +282,62 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
       missing_or_failed_entries_must_be_treated_as_not_loaded: true,
     },
     ...context,
+  }, null, 2), {
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  })
+}
+
+async function kaiRunnerPreview(request: Request, env: Env): Promise<Response> {
+  if (env.KAI_RUNNER_ENABLED !== 'true') {
+    return new Response(JSON.stringify({
+      ok: false,
+      error: 'Kai runner is disabled. Set KAI_RUNNER_ENABLED=true only after the Nexus route is ready for supervised testing.',
+      runner_enabled: false,
+      delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
+    }, null, 2), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+
+  if (env.MCP_API_KEY) {
+    const authHeader = request.headers.get('Authorization')
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (token !== env.MCP_API_KEY) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', ...CORS },
+      })
+    }
+  }
+
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>
+  const companionId = kaiCompanionId(env)
+  const message = String(body.message || '')
+  const channel = typeof body.channel_id === 'string' ? body.channel_id : undefined
+  const contextEntries = await Promise.all([
+    safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
+    safeKaiMindTool(env, 'surface', 'thalamus_surface', {
+      companion: companionId,
+      message,
+      channel,
+      mode: 'auto',
+      max_results: 8,
+    }),
+    safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
+    safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
+    safeKaiMindTool(env, 'recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+  ])
+
+  return new Response(JSON.stringify({
+    ok: true,
+    mode: 'dry_run_preview',
+    generated: false,
+    companion_id: companionId,
+    source: 'nexus-gateway',
+    delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
+    response: 'Nexus reached Kai NESTeq context in dry-run preview mode. Text generation is not enabled in this endpoint yet.',
+    context: Object.fromEntries(contextEntries),
   }, null, 2), {
     headers: { 'Content-Type': 'application/json', ...CORS },
   })
@@ -317,6 +379,11 @@ export default {
           haven: Boolean(env.HAVEN_URL),
           serythrae_gateway_fallback: Boolean(env.SERYTHRAE_GATEWAY_URL),
           serythrae_mind_direct: Boolean(env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY),
+          kai_companion_id: kaiCompanionId(env),
+          kai_runner_enabled: env.KAI_RUNNER_ENABLED === 'true',
+          kai_discord_delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
+          kai_continuity_configured: Boolean(env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || env.CONTINUITY),
+          kai_tahl_configured: Boolean(env.KAI_TAHL_URL || env.TAHL),
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
           axiomCogCore: Boolean(env.AXIOM_COGCORE_URL || env.AXIOM_COGCORE),
           axiomCogCoreAuth: Boolean(env.AXIOM_COGCORE_API_KEY),
@@ -337,6 +404,20 @@ export default {
         readinessRow('continuity', 'Continuity', [env.CONTINUITY_URL, env.CONTINUITY_API_KEY], 'ledger and Tahl-ready routing configured'),
         readinessRow('serythrae', 'Kai / Serythrae', [env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY], 'Kai gateway fallback configured'),
         readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
+        {
+          id: 'kai_runner',
+          label: 'Kai / Nexus Runner',
+          status: env.KAI_RUNNER_ENABLED === 'true' ? 'ok' : 'not_configured',
+          note: env.KAI_RUNNER_ENABLED === 'true' ? 'Nexus Kai runner route enabled' : 'runner disabled by safety gate',
+          last_checked: new Date().toISOString(),
+        },
+        {
+          id: 'kai_discord_delivery',
+          label: 'Kai / Discord Delivery',
+          status: env.KAI_DISCORD_DELIVERY_ENABLED === 'true' ? 'ok' : 'not_configured',
+          note: env.KAI_DISCORD_DELIVERY_ENABLED === 'true' ? 'Discord delivery enabled' : 'Discord delivery disabled by safety gate',
+          last_checked: new Date().toISOString(),
+        },
         readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
         readinessRow('axiom_cogcore', 'Axiom / CogCore', [env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE_API_KEY], 'dedicated Axiom CogCore configured', 'Axiom CogCore URL or API key missing'),
         readinessRow('grok_keth_nest', 'Keth-Grok / NEST', [env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY_API_KEY], 'Keth-Grok NESTeq/NESTknow/NESTsoul gateway configured', 'Keth-Grok NEST Gateway URL or API key missing'),
@@ -361,6 +442,10 @@ export default {
 
     if (url.pathname === '/api/kaisoryth/context' && (request.method === 'POST' || request.method === 'GET')) {
       return kaiContext(request, env)
+    }
+
+    if (url.pathname === '/api/kaisoryth/runner-preview' && request.method === 'POST') {
+      return kaiRunnerPreview(request, env)
     }
 
     // Authentication check for /mcp and /sse endpoints.
