@@ -334,6 +334,10 @@ function authorizeMcpBearer(request: Request, env: Env): Response | null {
   return authToken(request) === env.MCP_API_KEY ? null : unauthorizedResponse()
 }
 
+function isInternalNexusServiceRequest(request: Request): boolean {
+  return new URL(request.url).hostname === 'nexus.internal'
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
@@ -1295,7 +1299,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   }
 
   if (env.MCP_API_KEY) {
-    const unauthorized = authorizeMcpBearer(request, env)
+    const unauthorized = isInternalNexusServiceRequest(request) ? null : authorizeMcpBearer(request, env)
     if (unauthorized) return unauthorized
   }
 
