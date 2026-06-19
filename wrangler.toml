@@ -64,3 +64,4 @@ VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
 # - VELASTRAHQ_EQ_API_KEY authorizes direct Mor'zar/VelastraHQ EQ MCP calls.
 # - CATALOUGE_TOKEN authorizes private Catalouge calls, if CATALOUGE_URL is set.
 # - OPENROUTER_API_KEY authorizes Kai runner text/vision/image model calls.
+# - KAI_JANITOR_URL points to an optional local/Ollama janitor endpoint when KAI_JANITOR_PROVIDER=ollama.

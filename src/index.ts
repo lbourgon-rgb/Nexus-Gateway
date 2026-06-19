@@ -179,6 +179,7 @@ interface KaiRunnerResult {
   context_sources: string[]
   context: Record<string, unknown>
   prompt_packet?: Record<string, unknown>
+  janitor: KaiJanitorResult
   generation: KaiTextGenerationResult
   allowed_tools: string[]
   tool_calls: Array<Record<string, unknown>>
@@ -192,6 +193,26 @@ interface KaiTextGenerationResult {
   ok: boolean
   error?: string
   usage?: unknown
+}
+
+interface KaiJanitorAdvisory {
+  should_respond: boolean
+  salience: number
+  reason: string
+  entities: string[]
+  memory_hints: string[]
+  stale_context_risk: boolean
+}
+
+interface KaiJanitorResult {
+  attempted: boolean
+  enabled: boolean
+  provider: 'disabled' | 'openrouter' | 'ollama' | string
+  model: string | null
+  ok: boolean
+  advisory: KaiJanitorAdvisory | null
+  error?: string
+  retries?: number
 }
 
 const KAI_RUNNER_TOOL_ALLOWLIST = [
@@ -427,7 +448,55 @@ function compactJson(value: unknown, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]` : text
 }
 
-function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket): Record<string, unknown> {
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    try {
+      const parsed = JSON.parse(match[0])
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+    } catch {
+      return null
+    }
+  }
+}
+
+function validateKaiJanitorAdvisory(value: unknown): KaiJanitorAdvisory | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const salience = typeof record.salience === 'number' && Number.isFinite(record.salience)
+    ? Math.max(0, Math.min(1, record.salience))
+    : null
+  const entities = Array.isArray(record.entities)
+    ? record.entities.filter((item): item is string => typeof item === 'string').slice(0, 20)
+    : null
+  const memoryHints = Array.isArray(record.memory_hints)
+    ? record.memory_hints.filter((item): item is string => typeof item === 'string').slice(0, 20)
+    : null
+  if (
+    typeof record.should_respond !== 'boolean'
+    || salience === null
+    || typeof record.reason !== 'string'
+    || !entities
+    || !memoryHints
+    || typeof record.stale_context_risk !== 'boolean'
+  ) {
+    return null
+  }
+  return {
+    should_respond: record.should_respond,
+    salience,
+    reason: record.reason.slice(0, 500),
+    entities,
+    memory_hints: memoryHints,
+    stale_context_risk: record.stale_context_risk,
+  }
+}
+
+function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, janitor?: KaiJanitorResult): Record<string, unknown> {
   return {
     companion_id: contextPacket.companion_id,
     route_contract: {
@@ -453,6 +522,7 @@ function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket): Reco
     },
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
+    janitor_advisory: janitor?.ok ? janitor.advisory : null,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
     response_contract: {
       write_kai_voice_only: true,
@@ -537,6 +607,114 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>):
       usage: record.usage,
     },
   }
+}
+
+async function callOpenRouterJson(env: Env, model: string, system: string, user: string, maxTokens: number): Promise<{ ok: boolean; content: string | null; error?: string }> {
+  if (!env.OPENROUTER_API_KEY) return { ok: false, content: null, error: 'OPENROUTER_API_KEY is not configured' }
+  const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
+      'X-OpenRouter-Title': 'Nexus Kai Runner',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      temperature: 0.1,
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
+    }),
+  })
+  const text = await response.text()
+  let data: unknown = text
+  try {
+    data = JSON.parse(text)
+  } catch {}
+  if (!response.ok) {
+    return { ok: false, content: null, error: `OpenRouter ${response.status}: ${typeof data === 'string' ? data.slice(0, 500) : compactJson(data, 500)}` }
+  }
+  const record = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  const first = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {}
+  const message = first.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : {}
+  return { ok: true, content: typeof message.content === 'string' ? message.content : null }
+}
+
+async function callOllamaJson(env: Env, model: string, system: string, user: string): Promise<{ ok: boolean; content: string | null; error?: string }> {
+  if (!env.KAI_JANITOR_URL) return { ok: false, content: null, error: 'KAI_JANITOR_URL is not configured' }
+  const baseUrl = env.KAI_JANITOR_URL.replace(/\/+$/, '')
+  const response = await fetch(`${baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      format: 'json',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+    }),
+  })
+  const text = await response.text()
+  let data: unknown = text
+  try {
+    data = JSON.parse(text)
+  } catch {}
+  if (!response.ok) {
+    return { ok: false, content: null, error: `Ollama ${response.status}: ${typeof data === 'string' ? data.slice(0, 500) : compactJson(data, 500)}` }
+  }
+  const record = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const message = record.message && typeof record.message === 'object' ? record.message as Record<string, unknown> : {}
+  return { ok: true, content: typeof message.content === 'string' ? message.content : null }
+}
+
+async function runKaiJanitor(env: Env, promptPacket: Record<string, unknown>): Promise<KaiJanitorResult> {
+  const provider = (env.KAI_JANITOR_PROVIDER || 'disabled').trim().toLowerCase()
+  const enabled = Boolean(provider && provider !== 'disabled')
+  const model = env.KAI_JANITOR_MODEL || null
+  if (!enabled) {
+    return { attempted: false, enabled: false, provider: 'disabled', model, ok: false, advisory: null, error: 'Janitor lane disabled' }
+  }
+  if (!model) {
+    return { attempted: false, enabled: true, provider, model, ok: false, advisory: null, error: 'KAI_JANITOR_MODEL is not configured' }
+  }
+
+  const system = [
+    'You are a narrow context janitor for Kai, not Kai.',
+    'Return ONLY compact JSON with keys: should_respond, salience, reason, entities, memory_hints, stale_context_risk.',
+    'Do not write memory. Do not generate Kai voice. Do not decide final delivery.',
+  ].join('\n')
+  const user = compactJson({
+    current_turn: promptPacket.current_turn,
+    context_sources: promptPacket.context_sources,
+    route_contract: promptPacket.route_contract,
+  }, 12000)
+
+  let lastError = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = provider === 'ollama'
+      ? await callOllamaJson(env, model, system, user)
+      : await callOpenRouterJson(env, model, system, user, 500)
+    if (!response.ok || !response.content) {
+      lastError = response.error || 'Janitor returned no content'
+      continue
+    }
+    const parsed = parseJsonObject(response.content)
+    const advisory = validateKaiJanitorAdvisory(parsed)
+    if (advisory) {
+      return { attempted: true, enabled: true, provider, model, ok: true, advisory, retries: attempt }
+    }
+    lastError = 'Janitor output failed schema validation'
+  }
+
+  return { attempted: true, enabled: true, provider, model, ok: false, advisory: null, error: lastError || 'Janitor failed', retries: 1 }
 }
 
 async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiRunnerContextPacket> {
@@ -655,7 +833,9 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   const deliveryEnabled = env.KAI_DISCORD_DELIVERY_ENABLED === 'true'
   const mode: KaiRunnerResult['mode'] = deliveryEnabled ? 'dry_run' : 'delivery_blocked'
   const shouldRespond = Boolean(envelope.content || envelope.attachments.length)
-  const promptPacket = buildKaiRunnerPromptPacket(contextPacket)
+  const janitorProbePacket = buildKaiRunnerPromptPacket(contextPacket)
+  const janitor = await runKaiJanitor(env, janitorProbePacket)
+  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, janitor)
   const generationResult = shouldRespond
     ? await generateKaiText(env, promptPacket)
     : {
@@ -687,6 +867,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
     prompt_packet: truncateKaiContext(promptPacket, 12000) as Record<string, unknown>,
+    janitor,
     generation: generationResult.generation,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
     tool_calls: [],
@@ -742,6 +923,10 @@ export default {
           kai_runner_enabled: env.KAI_RUNNER_ENABLED === 'true',
           kai_discord_delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
           kai_text_model_configured: Boolean(env.KAI_TEXT_MODEL && env.OPENROUTER_API_KEY),
+          kai_janitor_enabled: Boolean(env.KAI_JANITOR_PROVIDER && env.KAI_JANITOR_PROVIDER !== 'disabled'),
+          kai_janitor_configured: env.KAI_JANITOR_PROVIDER === 'ollama'
+            ? Boolean(env.KAI_JANITOR_MODEL && env.KAI_JANITOR_URL)
+            : Boolean(env.KAI_JANITOR_MODEL && (env.OPENROUTER_API_KEY || env.KAI_JANITOR_PROVIDER === 'disabled' || !env.KAI_JANITOR_PROVIDER)),
           kai_continuity_configured: Boolean(env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || env.CONTINUITY),
           kai_tahl_configured: Boolean(env.KAI_TAHL_URL || env.TAHL),
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
@@ -779,6 +964,17 @@ export default {
           last_checked: new Date().toISOString(),
         },
         readinessRow('kai_text_model', 'Kai / Text Model', [env.KAI_TEXT_MODEL, env.OPENROUTER_API_KEY], 'Kai text model configured through OpenRouter', 'KAI_TEXT_MODEL or OPENROUTER_API_KEY missing'),
+        {
+          id: 'kai_janitor',
+          label: 'Kai / Janitor Lane',
+          status: !env.KAI_JANITOR_PROVIDER || env.KAI_JANITOR_PROVIDER === 'disabled'
+            ? 'not_configured'
+            : ((env.KAI_JANITOR_PROVIDER === 'ollama' ? Boolean(env.KAI_JANITOR_MODEL && env.KAI_JANITOR_URL) : Boolean(env.KAI_JANITOR_MODEL && env.OPENROUTER_API_KEY)) ? 'ok' : 'not_configured'),
+          note: !env.KAI_JANITOR_PROVIDER || env.KAI_JANITOR_PROVIDER === 'disabled'
+            ? 'janitor disabled by default'
+            : 'schema-validated advisory lane configured',
+          last_checked: new Date().toISOString(),
+        },
         readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
         readinessRow('axiom_cogcore', 'Axiom / CogCore', [env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE_API_KEY], 'dedicated Axiom CogCore configured', 'Axiom CogCore URL or API key missing'),
         readinessRow('grok_keth_nest', 'Keth-Grok / NEST', [env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY_API_KEY], 'Keth-Grok NESTeq/NESTknow/NESTsoul gateway configured', 'Keth-Grok NEST Gateway URL or API key missing'),
