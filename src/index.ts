@@ -338,16 +338,23 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+function envText(value: unknown, fallback = ''): string {
+  if (typeof value !== 'string' || !value.trim()) return fallback
+  const trimmed = value.trim()
+  const assignment = trimmed.match(/^[A-Z0-9_]+\s*=\s*([\s\S]+)$/i)
+  return assignment ? assignment[1].trim() : trimmed
+}
+
 function envFlag(value: unknown): boolean {
-  return typeof value === 'string' && value.trim().toLowerCase() === 'true'
+  return envText(value).toLowerCase() === 'true'
 }
 
 function envChoice(value: unknown, fallback = ''): string {
-  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : fallback
+  return envText(value, fallback).toLowerCase()
 }
 
 function envPresent(value: unknown): boolean {
-  return typeof value === 'string' && value.trim().length > 0
+  return envText(value).length > 0
 }
 
 function envProviderEnabled(value: unknown): boolean {
@@ -403,30 +410,30 @@ function normalizeKaiRunnerEnvelope(body: Record<string, unknown>): KaiDiscordEn
 function kaiRunnerModelLanes(env: Env): Record<string, unknown> {
   return {
     text: {
-      configured: Boolean(env.KAI_TEXT_MODEL),
-      model: env.KAI_TEXT_MODEL || null,
-      backup_model: env.KAI_BACKUP_TEXT_MODEL || null,
+      configured: envPresent(env.KAI_TEXT_MODEL),
+      model: envText(env.KAI_TEXT_MODEL) || null,
+      backup_model: envText(env.KAI_BACKUP_TEXT_MODEL) || null,
     },
     vision: {
       configured: envProviderEnabled(env.KAI_VISION_PROVIDER) && envPresent(env.KAI_VISION_MODEL),
       provider: envChoice(env.KAI_VISION_PROVIDER) || null,
-      model: env.KAI_VISION_MODEL || null,
+      model: envText(env.KAI_VISION_MODEL) || null,
     },
     image: {
       configured: envProviderEnabled(env.KAI_IMAGE_PROVIDER) && envPresent(env.KAI_IMAGE_MODEL),
       provider: envChoice(env.KAI_IMAGE_PROVIDER) || null,
-      model: env.KAI_IMAGE_MODEL || null,
+      model: envText(env.KAI_IMAGE_MODEL) || null,
     },
     tts: {
       configured: envProviderEnabled(env.KAI_TTS_PROVIDER) && envPresent(env.KAI_TTS_VOICE_ID),
       provider: envChoice(env.KAI_TTS_PROVIDER) || null,
-      voice_configured: Boolean(env.KAI_TTS_VOICE_ID),
-      model: env.KAI_TTS_MODEL || 'eleven_multilingual_v2',
+      voice_configured: envPresent(env.KAI_TTS_VOICE_ID),
+      model: envText(env.KAI_TTS_MODEL, 'eleven_multilingual_v2'),
     },
     janitor: {
       enabled: envProviderEnabled(env.KAI_JANITOR_PROVIDER),
       provider: envChoice(env.KAI_JANITOR_PROVIDER, 'disabled'),
-      model: env.KAI_JANITOR_MODEL || null,
+      model: envText(env.KAI_JANITOR_MODEL) || null,
     },
   }
 }
@@ -685,12 +692,13 @@ function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, visio
 }
 
 async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, modelOverride?: string): Promise<{ text: string | null; generation: KaiTextGenerationResult }> {
-  const model = modelOverride || env.KAI_TEXT_MODEL || null
+  const model = modelOverride || envText(env.KAI_TEXT_MODEL) || null
+  const apiKey = envText(env.OPENROUTER_API_KEY)
   const provider: KaiTextGenerationResult['provider'] = 'openrouter'
   if (!model) {
     return { text: null, generation: { attempted: false, provider, model, ok: false, error: 'KAI_TEXT_MODEL or request model is not configured' } }
   }
-  if (!env.OPENROUTER_API_KEY) {
+  if (!apiKey) {
     return { text: null, generation: { attempted: false, provider, model, ok: false, error: 'OPENROUTER_API_KEY is not configured' } }
   }
 
@@ -698,7 +706,7 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
       'X-OpenRouter-Title': 'Nexus Kai Runner',
@@ -761,12 +769,13 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
 }
 
 async function callOpenRouterJson(env: Env, model: string, system: string, user: string, maxTokens: number): Promise<{ ok: boolean; content: string | null; error?: string }> {
-  if (!env.OPENROUTER_API_KEY) return { ok: false, content: null, error: 'OPENROUTER_API_KEY is not configured' }
+  const apiKey = envText(env.OPENROUTER_API_KEY)
+  if (!apiKey) return { ok: false, content: null, error: 'OPENROUTER_API_KEY is not configured' }
   const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
       'X-OpenRouter-Title': 'Nexus Kai Runner',
@@ -798,14 +807,15 @@ async function callOpenRouterJson(env: Env, model: string, system: string, user:
 }
 
 async function callOpenRouterVision(env: Env, model: string, attachment: KaiRunnerAttachment, prompt: string): Promise<{ ok: boolean; content: string | null; error?: string }> {
-  if (!env.OPENROUTER_API_KEY) return { ok: false, content: null, error: 'OPENROUTER_API_KEY is not configured' }
+  const apiKey = envText(env.OPENROUTER_API_KEY)
+  if (!apiKey) return { ok: false, content: null, error: 'OPENROUTER_API_KEY is not configured' }
   const imageUrl = attachment.url || attachment.proxy_url
   if (!imageUrl) return { ok: false, content: null, error: 'Attachment has no URL for vision processing' }
   const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
       'X-OpenRouter-Title': 'Nexus Kai Runner',
@@ -841,8 +851,9 @@ async function callOpenRouterVision(env: Env, model: string, attachment: KaiRunn
 }
 
 async function callOllamaJson(env: Env, model: string, system: string, user: string): Promise<{ ok: boolean; content: string | null; error?: string }> {
-  if (!env.KAI_JANITOR_URL) return { ok: false, content: null, error: 'KAI_JANITOR_URL is not configured' }
-  const baseUrl = env.KAI_JANITOR_URL.replace(/\/+$/, '')
+  const janitorUrl = envText(env.KAI_JANITOR_URL)
+  if (!janitorUrl) return { ok: false, content: null, error: 'KAI_JANITOR_URL is not configured' }
+  const baseUrl = janitorUrl.replace(/\/+$/, '')
   const response = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -870,9 +881,9 @@ async function callOllamaJson(env: Env, model: string, system: string, user: str
 }
 
 async function runKaiJanitor(env: Env, promptPacket: Record<string, unknown>): Promise<KaiJanitorResult> {
-  const provider = (env.KAI_JANITOR_PROVIDER || 'disabled').trim().toLowerCase()
+  const provider = envChoice(env.KAI_JANITOR_PROVIDER, 'disabled')
   const enabled = Boolean(provider && provider !== 'disabled')
-  const model = env.KAI_JANITOR_MODEL || null
+  const model = envText(env.KAI_JANITOR_MODEL) || null
   if (!enabled) {
     return { attempted: false, enabled: false, provider: 'disabled', model, ok: false, advisory: null, error: 'Janitor lane disabled' }
   }
@@ -912,9 +923,9 @@ async function runKaiJanitor(env: Env, promptPacket: Record<string, unknown>): P
 }
 
 async function runKaiVision(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiVisionResult> {
-  const provider = (env.KAI_VISION_PROVIDER || 'disabled').trim().toLowerCase()
+  const provider = envChoice(env.KAI_VISION_PROVIDER, 'disabled')
   const enabled = Boolean(provider && provider !== 'disabled')
-  const model = env.KAI_VISION_MODEL || null
+  const model = envText(env.KAI_VISION_MODEL) || null
   const imageAttachments = envelope.attachments.filter(isImageAttachment)
   const skipped = envelope.attachments.filter((attachment) => !isImageAttachment(attachment))
   if (!enabled) {
@@ -969,9 +980,9 @@ async function runKaiVision(env: Env, envelope: KaiDiscordEnvelope): Promise<Kai
 }
 
 async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, body: Record<string, unknown>): Promise<KaiImageGenerationResult> {
-  const provider = (env.KAI_IMAGE_PROVIDER || 'disabled').trim().toLowerCase()
+  const provider = envChoice(env.KAI_IMAGE_PROVIDER, 'disabled')
   const enabled = Boolean(provider && provider !== 'disabled')
-  const model = env.KAI_IMAGE_MODEL || null
+  const model = envText(env.KAI_IMAGE_MODEL) || null
   const prompt = extractKaiImagePrompt(body, envelope)
   if (!enabled) {
     return { attempted: false, enabled: false, provider: 'disabled', model, ok: false, prompt, images: [], error: prompt ? 'Image generation lane disabled' : undefined }
@@ -982,7 +993,8 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
   if (!model) {
     return { attempted: false, enabled: true, provider, model, ok: false, prompt, images: [], error: 'KAI_IMAGE_MODEL is not configured' }
   }
-  if (!env.OPENROUTER_API_KEY) {
+  const apiKey = envText(env.OPENROUTER_API_KEY)
+  if (!apiKey) {
     return { attempted: false, enabled: true, provider, model, ok: false, prompt, images: [], error: 'OPENROUTER_API_KEY is not configured' }
   }
   if (!prompt) {
@@ -993,7 +1005,7 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
       'X-OpenRouter-Title': 'Nexus Kai Runner',
@@ -1051,10 +1063,11 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
 }
 
 async function runKaiTts(env: Env, envelope: KaiDiscordEnvelope, body: Record<string, unknown>, generatedText: string | null): Promise<KaiTtsResult> {
-  const provider = (env.KAI_TTS_PROVIDER || 'disabled').trim().toLowerCase()
+  const provider = envChoice(env.KAI_TTS_PROVIDER, 'disabled')
   const enabled = Boolean(provider && provider !== 'disabled')
-  const model = env.KAI_TTS_MODEL || 'eleven_multilingual_v2'
-  const voiceId = env.KAI_TTS_VOICE_ID || ''
+  const model = envText(env.KAI_TTS_MODEL, 'eleven_multilingual_v2')
+  const voiceId = envText(env.KAI_TTS_VOICE_ID)
+  const apiKey = envText(env.ELEVENLABS_API_KEY)
   const ttsText = extractKaiTtsText(body, envelope, generatedText)
   const outputFormat = 'mp3_44100_128'
 
@@ -1087,7 +1100,7 @@ async function runKaiTts(env: Env, envelope: KaiDiscordEnvelope, body: Record<st
   if (!voiceId) {
     return { attempted: false, enabled: true, provider, model, voice_id_configured: false, ok: false, text_chars: ttsText?.length || 0, audio: null, error: 'KAI_TTS_VOICE_ID is not configured' }
   }
-  if (!env.ELEVENLABS_API_KEY) {
+  if (!apiKey) {
     return { attempted: false, enabled: true, provider, model, voice_id_configured: true, ok: false, text_chars: ttsText?.length || 0, audio: null, error: 'ELEVENLABS_API_KEY is not configured' }
   }
   if (!ttsText) {
@@ -1097,7 +1110,7 @@ async function runKaiTts(env: Env, envelope: KaiDiscordEnvelope, body: Record<st
   const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(outputFormat)}`, {
     method: 'POST',
     headers: {
-      'xi-api-key': env.ELEVENLABS_API_KEY,
+      'xi-api-key': apiKey,
       'Content-Type': 'application/json',
       'Accept': 'audio/mpeg',
     },
@@ -1269,7 +1282,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
         generation: {
           attempted: false,
           provider: 'openrouter' as const,
-          model: requestedModel || env.KAI_TEXT_MODEL || null,
+          model: requestedModel || envText(env.KAI_TEXT_MODEL) || null,
           ok: false,
           error: 'No content or attachments to respond to',
         },
@@ -1352,17 +1365,17 @@ export default {
           kai_companion_id: kaiCompanionId(env),
           kai_runner_enabled: envFlag(env.KAI_RUNNER_ENABLED),
           kai_discord_delivery_enabled: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED),
-          kai_text_model_configured: Boolean(env.KAI_TEXT_MODEL && env.OPENROUTER_API_KEY),
+          kai_text_model_configured: Boolean(envPresent(env.KAI_TEXT_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_vision_enabled: envProviderEnabled(env.KAI_VISION_PROVIDER),
-          kai_vision_configured: Boolean(envChoice(env.KAI_VISION_PROVIDER) === 'openrouter' && env.KAI_VISION_MODEL && env.OPENROUTER_API_KEY),
+          kai_vision_configured: Boolean(envChoice(env.KAI_VISION_PROVIDER) === 'openrouter' && envPresent(env.KAI_VISION_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_image_enabled: envProviderEnabled(env.KAI_IMAGE_PROVIDER),
-          kai_image_configured: Boolean(envChoice(env.KAI_IMAGE_PROVIDER) === 'openrouter' && env.KAI_IMAGE_MODEL && env.OPENROUTER_API_KEY),
+          kai_image_configured: Boolean(envChoice(env.KAI_IMAGE_PROVIDER) === 'openrouter' && envPresent(env.KAI_IMAGE_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_tts_enabled: envProviderEnabled(env.KAI_TTS_PROVIDER),
-          kai_tts_configured: Boolean(envChoice(env.KAI_TTS_PROVIDER) === 'elevenlabs' && env.KAI_TTS_VOICE_ID && env.ELEVENLABS_API_KEY),
+          kai_tts_configured: Boolean(envChoice(env.KAI_TTS_PROVIDER) === 'elevenlabs' && envPresent(env.KAI_TTS_VOICE_ID) && envPresent(env.ELEVENLABS_API_KEY)),
           kai_janitor_enabled: envProviderEnabled(env.KAI_JANITOR_PROVIDER),
           kai_janitor_configured: envChoice(env.KAI_JANITOR_PROVIDER) === 'ollama'
-            ? Boolean(env.KAI_JANITOR_MODEL && env.KAI_JANITOR_URL)
-            : Boolean(envProviderEnabled(env.KAI_JANITOR_PROVIDER) && env.KAI_JANITOR_MODEL && env.OPENROUTER_API_KEY),
+            ? Boolean(envPresent(env.KAI_JANITOR_MODEL) && envPresent(env.KAI_JANITOR_URL))
+            : Boolean(envProviderEnabled(env.KAI_JANITOR_PROVIDER) && envPresent(env.KAI_JANITOR_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_continuity_configured: Boolean(env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || env.CONTINUITY),
           kai_tahl_configured: Boolean(env.KAI_TAHL_URL || env.TAHL),
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
@@ -1399,13 +1412,13 @@ export default {
           note: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED) ? 'Discord delivery enabled' : 'Discord delivery disabled by safety gate',
           last_checked: new Date().toISOString(),
         },
-        readinessRow('kai_text_model', 'Kai / Text Model', [env.KAI_TEXT_MODEL, env.OPENROUTER_API_KEY], 'Kai text model configured through OpenRouter', 'KAI_TEXT_MODEL or OPENROUTER_API_KEY missing'),
+        readinessRow('kai_text_model', 'Kai / Text Model', [envText(env.KAI_TEXT_MODEL), envText(env.OPENROUTER_API_KEY)], 'Kai text model configured through OpenRouter', 'KAI_TEXT_MODEL or OPENROUTER_API_KEY missing'),
         {
           id: 'kai_vision',
           label: 'Kai / Vision OCR Lane',
           status: !envProviderEnabled(env.KAI_VISION_PROVIDER)
             ? 'not_configured'
-            : ((envChoice(env.KAI_VISION_PROVIDER) === 'openrouter' && env.KAI_VISION_MODEL && env.OPENROUTER_API_KEY) ? 'ok' : 'not_configured'),
+            : ((envChoice(env.KAI_VISION_PROVIDER) === 'openrouter' && envPresent(env.KAI_VISION_MODEL) && envPresent(env.OPENROUTER_API_KEY)) ? 'ok' : 'not_configured'),
           note: !envProviderEnabled(env.KAI_VISION_PROVIDER)
             ? 'vision/OCR disabled by default'
             : 'image attachment summarization configured',
@@ -1416,7 +1429,7 @@ export default {
           label: 'Kai / Image Generation',
           status: !envProviderEnabled(env.KAI_IMAGE_PROVIDER)
             ? 'not_configured'
-            : ((envChoice(env.KAI_IMAGE_PROVIDER) === 'openrouter' && env.KAI_IMAGE_MODEL && env.OPENROUTER_API_KEY) ? 'ok' : 'not_configured'),
+            : ((envChoice(env.KAI_IMAGE_PROVIDER) === 'openrouter' && envPresent(env.KAI_IMAGE_MODEL) && envPresent(env.OPENROUTER_API_KEY)) ? 'ok' : 'not_configured'),
           note: !envProviderEnabled(env.KAI_IMAGE_PROVIDER)
             ? 'image generation disabled by default'
             : 'image generation configured through OpenRouter',
@@ -1427,7 +1440,7 @@ export default {
           label: 'Kai / TTS Voice',
           status: !envProviderEnabled(env.KAI_TTS_PROVIDER)
             ? 'not_configured'
-            : ((envChoice(env.KAI_TTS_PROVIDER) === 'elevenlabs' && env.KAI_TTS_VOICE_ID && env.ELEVENLABS_API_KEY) ? 'ok' : 'not_configured'),
+            : ((envChoice(env.KAI_TTS_PROVIDER) === 'elevenlabs' && envPresent(env.KAI_TTS_VOICE_ID) && envPresent(env.ELEVENLABS_API_KEY)) ? 'ok' : 'not_configured'),
           note: !envProviderEnabled(env.KAI_TTS_PROVIDER)
             ? 'TTS disabled by default'
             : 'ElevenLabs TTS configured for explicit voice requests',
@@ -1438,7 +1451,7 @@ export default {
           label: 'Kai / Janitor Lane',
           status: !envProviderEnabled(env.KAI_JANITOR_PROVIDER)
             ? 'not_configured'
-            : ((envChoice(env.KAI_JANITOR_PROVIDER) === 'ollama' ? Boolean(env.KAI_JANITOR_MODEL && env.KAI_JANITOR_URL) : Boolean(env.KAI_JANITOR_MODEL && env.OPENROUTER_API_KEY)) ? 'ok' : 'not_configured'),
+            : ((envChoice(env.KAI_JANITOR_PROVIDER) === 'ollama' ? Boolean(envPresent(env.KAI_JANITOR_MODEL) && envPresent(env.KAI_JANITOR_URL)) : Boolean(envPresent(env.KAI_JANITOR_MODEL) && envPresent(env.OPENROUTER_API_KEY))) ? 'ok' : 'not_configured'),
           note: !envProviderEnabled(env.KAI_JANITOR_PROVIDER)
             ? 'janitor disabled by default'
             : 'schema-validated advisory lane configured',
