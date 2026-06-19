@@ -179,11 +179,30 @@ interface KaiRunnerResult {
   context_sources: string[]
   context: Record<string, unknown>
   prompt_packet?: Record<string, unknown>
+  vision: KaiVisionResult
   janitor: KaiJanitorResult
   generation: KaiTextGenerationResult
   allowed_tools: string[]
   tool_calls: Array<Record<string, unknown>>
   memory_writes: Array<Record<string, unknown>>
+}
+
+interface KaiVisionSummary {
+  attachment_id?: string
+  filename?: string
+  content_type?: string
+  summary: string
+}
+
+interface KaiVisionResult {
+  attempted: boolean
+  enabled: boolean
+  provider: 'disabled' | 'openrouter' | string
+  model: string | null
+  ok: boolean
+  summaries: KaiVisionSummary[]
+  skipped: KaiRunnerAttachment[]
+  error?: string
 }
 
 interface KaiTextGenerationResult {
@@ -496,7 +515,14 @@ function validateKaiJanitorAdvisory(value: unknown): KaiJanitorAdvisory | null {
   }
 }
 
-function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, janitor?: KaiJanitorResult): Record<string, unknown> {
+function isImageAttachment(attachment: KaiRunnerAttachment): boolean {
+  const type = String(attachment.content_type || '').toLowerCase()
+  if (type.startsWith('image/')) return true
+  const name = String(attachment.filename || attachment.url || '').toLowerCase()
+  return /\.(png|jpe?g|webp|gif)$/i.test(name)
+}
+
+function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, vision?: KaiVisionResult, janitor?: KaiJanitorResult): Record<string, unknown> {
   return {
     companion_id: contextPacket.companion_id,
     route_contract: {
@@ -522,6 +548,7 @@ function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, janit
     },
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
+    vision_summaries: vision?.ok ? vision.summaries : [],
     janitor_advisory: janitor?.ok ? janitor.advisory : null,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
     response_contract: {
@@ -646,6 +673,49 @@ async function callOpenRouterJson(env: Env, model: string, system: string, user:
   return { ok: true, content: typeof message.content === 'string' ? message.content : null }
 }
 
+async function callOpenRouterVision(env: Env, model: string, attachment: KaiRunnerAttachment, prompt: string): Promise<{ ok: boolean; content: string | null; error?: string }> {
+  if (!env.OPENROUTER_API_KEY) return { ok: false, content: null, error: 'OPENROUTER_API_KEY is not configured' }
+  const imageUrl = attachment.url || attachment.proxy_url
+  if (!imageUrl) return { ok: false, content: null, error: 'Attachment has no URL for vision processing' }
+  const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
+      'X-OpenRouter-Title': 'Nexus Kai Runner',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+      max_tokens: 500,
+      temperature: 0.1,
+    }),
+  })
+  const text = await response.text()
+  let data: unknown = text
+  try {
+    data = JSON.parse(text)
+  } catch {}
+  if (!response.ok) {
+    return { ok: false, content: null, error: `OpenRouter vision ${response.status}: ${typeof data === 'string' ? data.slice(0, 500) : compactJson(data, 500)}` }
+  }
+  const record = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  const first = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {}
+  const message = first.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : {}
+  return { ok: true, content: typeof message.content === 'string' ? message.content.trim() : null }
+}
+
 async function callOllamaJson(env: Env, model: string, system: string, user: string): Promise<{ ok: boolean; content: string | null; error?: string }> {
   if (!env.KAI_JANITOR_URL) return { ok: false, content: null, error: 'KAI_JANITOR_URL is not configured' }
   const baseUrl = env.KAI_JANITOR_URL.replace(/\/+$/, '')
@@ -715,6 +785,63 @@ async function runKaiJanitor(env: Env, promptPacket: Record<string, unknown>): P
   }
 
   return { attempted: true, enabled: true, provider, model, ok: false, advisory: null, error: lastError || 'Janitor failed', retries: 1 }
+}
+
+async function runKaiVision(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiVisionResult> {
+  const provider = (env.KAI_VISION_PROVIDER || 'disabled').trim().toLowerCase()
+  const enabled = Boolean(provider && provider !== 'disabled')
+  const model = env.KAI_VISION_MODEL || null
+  const imageAttachments = envelope.attachments.filter(isImageAttachment)
+  const skipped = envelope.attachments.filter((attachment) => !isImageAttachment(attachment))
+  if (!enabled) {
+    return { attempted: false, enabled: false, provider: 'disabled', model, ok: false, summaries: [], skipped, error: imageAttachments.length ? 'Vision lane disabled' : undefined }
+  }
+  if (provider !== 'openrouter') {
+    return { attempted: false, enabled: true, provider, model, ok: false, summaries: [], skipped, error: `Unsupported vision provider: ${provider}` }
+  }
+  if (!model) {
+    return { attempted: false, enabled: true, provider, model, ok: false, summaries: [], skipped, error: 'KAI_VISION_MODEL is not configured' }
+  }
+  if (!imageAttachments.length) {
+    return { attempted: false, enabled: true, provider, model, ok: true, summaries: [], skipped }
+  }
+
+  const summaries: KaiVisionSummary[] = []
+  const errors: string[] = []
+  for (const attachment of imageAttachments.slice(0, 4)) {
+    const response = await callOpenRouterVision(
+      env,
+      model,
+      attachment,
+      [
+        'Summarize this Discord image for Kai in 5 concise bullet-like clauses.',
+        'Include visible text/OCR if present.',
+        'Do not infer private facts beyond what is visible.',
+        'Do not produce a final reply; this is context only.',
+      ].join(' ')
+    )
+    if (response.ok && response.content) {
+      summaries.push({
+        attachment_id: attachment.id,
+        filename: attachment.filename,
+        content_type: attachment.content_type,
+        summary: response.content.slice(0, 2000),
+      })
+    } else {
+      errors.push(`${attachment.filename || attachment.id || 'attachment'}: ${response.error || 'no summary'}`)
+    }
+  }
+
+  return {
+    attempted: true,
+    enabled: true,
+    provider,
+    model,
+    ok: summaries.length > 0 || errors.length === 0,
+    summaries,
+    skipped,
+    ...(errors.length ? { error: errors.join('; ').slice(0, 1000) } : {}),
+  }
 }
 
 async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiRunnerContextPacket> {
@@ -833,9 +960,10 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   const deliveryEnabled = env.KAI_DISCORD_DELIVERY_ENABLED === 'true'
   const mode: KaiRunnerResult['mode'] = deliveryEnabled ? 'dry_run' : 'delivery_blocked'
   const shouldRespond = Boolean(envelope.content || envelope.attachments.length)
-  const janitorProbePacket = buildKaiRunnerPromptPacket(contextPacket)
+  const vision = await runKaiVision(env, envelope)
+  const janitorProbePacket = buildKaiRunnerPromptPacket(contextPacket, vision)
   const janitor = await runKaiJanitor(env, janitorProbePacket)
-  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, janitor)
+  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor)
   const generationResult = shouldRespond
     ? await generateKaiText(env, promptPacket)
     : {
@@ -867,6 +995,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
     prompt_packet: truncateKaiContext(promptPacket, 12000) as Record<string, unknown>,
+    vision,
     janitor,
     generation: generationResult.generation,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
@@ -923,6 +1052,8 @@ export default {
           kai_runner_enabled: env.KAI_RUNNER_ENABLED === 'true',
           kai_discord_delivery_enabled: env.KAI_DISCORD_DELIVERY_ENABLED === 'true',
           kai_text_model_configured: Boolean(env.KAI_TEXT_MODEL && env.OPENROUTER_API_KEY),
+          kai_vision_enabled: Boolean(env.KAI_VISION_PROVIDER && env.KAI_VISION_PROVIDER !== 'disabled'),
+          kai_vision_configured: Boolean(env.KAI_VISION_PROVIDER === 'openrouter' && env.KAI_VISION_MODEL && env.OPENROUTER_API_KEY),
           kai_janitor_enabled: Boolean(env.KAI_JANITOR_PROVIDER && env.KAI_JANITOR_PROVIDER !== 'disabled'),
           kai_janitor_configured: env.KAI_JANITOR_PROVIDER === 'ollama'
             ? Boolean(env.KAI_JANITOR_MODEL && env.KAI_JANITOR_URL)
@@ -964,6 +1095,17 @@ export default {
           last_checked: new Date().toISOString(),
         },
         readinessRow('kai_text_model', 'Kai / Text Model', [env.KAI_TEXT_MODEL, env.OPENROUTER_API_KEY], 'Kai text model configured through OpenRouter', 'KAI_TEXT_MODEL or OPENROUTER_API_KEY missing'),
+        {
+          id: 'kai_vision',
+          label: 'Kai / Vision OCR Lane',
+          status: !env.KAI_VISION_PROVIDER || env.KAI_VISION_PROVIDER === 'disabled'
+            ? 'not_configured'
+            : ((env.KAI_VISION_PROVIDER === 'openrouter' && env.KAI_VISION_MODEL && env.OPENROUTER_API_KEY) ? 'ok' : 'not_configured'),
+          note: !env.KAI_VISION_PROVIDER || env.KAI_VISION_PROVIDER === 'disabled'
+            ? 'vision/OCR disabled by default'
+            : 'image attachment summarization configured',
+          last_checked: new Date().toISOString(),
+        },
         {
           id: 'kai_janitor',
           label: 'Kai / Janitor Lane',
