@@ -343,6 +343,23 @@ async function callKaiMindTool(env: Env, tool: string, args: Record<string, unkn
   return { source: 'serythrae-gw-fallback', result }
 }
 
+async function callContinuityJson(env: Env, path: string): Promise<unknown> {
+  if (!env.KAI_CONTINUITY_URL && !env.CONTINUITY_URL && !env.CONTINUITY) {
+    return { ok: false, skipped: true, reason: 'Continuity URL/service binding is not configured' }
+  }
+  const headers = new Headers({ Accept: 'application/json' })
+  if (env.CONTINUITY_API_KEY) headers.set('Authorization', `Bearer ${env.CONTINUITY_API_KEY}`)
+  const base = (env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || 'https://continuity-worker.internal').replace(/\/+$/, '')
+  const request = new Request(`${base}${path}`, { method: 'GET', headers })
+  const response = env.CONTINUITY ? await env.CONTINUITY.fetch(request) : await fetch(request)
+  const text = await response.text()
+  let body: unknown = text
+  try {
+    body = JSON.parse(text)
+  } catch {}
+  return response.ok ? body : { ok: false, status: response.status, body: text.slice(0, 500) }
+}
+
 function truncateKaiContext(value: unknown, maxChars: number): unknown {
   if (typeof value === 'string') {
     return value.length > maxChars
@@ -370,11 +387,24 @@ async function safeKaiMindTool(env: Env, label: string, tool: string, args: Reco
   }
 }
 
+async function safeContinuityStatus(env: Env, label = 'continuity_inbox_status') {
+  try {
+    return [label, truncateKaiContext(await callContinuityJson(env, '/kai/inbox/status?limit=200'), 12000)] as const
+  } catch (error) {
+    return [label, {
+      ok: false,
+      endpoint: '/kai/inbox/status',
+      error: error instanceof Error ? error.message : String(error),
+    }] as const
+  }
+}
+
 async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiRunnerContextPacket> {
   const companionId = kaiCompanionId(env)
   const message = envelope.content
   const channel = envelope.thread_id || envelope.channel_id
   const contextEntries = await Promise.all([
+    safeContinuityStatus(env),
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
     safeKaiMindTool(env, 'surface', 'thalamus_surface', {
       companion: companionId,
