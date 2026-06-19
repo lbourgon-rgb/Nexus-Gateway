@@ -148,6 +148,7 @@ interface KaiDiscordEnvelope {
   author_username?: string
   timestamp?: string
   content: string
+  recent_context?: string
   mentions?: string[]
   attachments: KaiRunnerAttachment[]
   trigger?: 'listener' | 'mention' | 'manual' | 'preview' | 'unknown'
@@ -212,6 +213,9 @@ interface KaiGeneratedImage {
   mime_type?: string
   data_url_preview?: string
   url?: string
+  stored_url?: string
+  r2_key?: string
+  storage_error?: string
   byte_length_estimate?: number
 }
 
@@ -222,6 +226,7 @@ interface KaiImageGenerationResult {
   model: string | null
   ok: boolean
   prompt: string | null
+  reference_count?: number
   images: KaiGeneratedImage[]
   error?: string
 }
@@ -282,6 +287,15 @@ const KAI_RUNNER_TOOL_ALLOWLIST = [
   'kaisoryth_threads_active',
   'kaisoryth_home_read',
   'kaisoryth_love_letters',
+  'social_graph_lookup',
+  'social_graph_upsert_person',
+  'social_graph_add_fact',
+  'social_graph_recent',
+  'social_graph_log_miss',
+  'social_engagement_decide',
+  'kai_image_reference_store',
+  'kai_image_reference_list',
+  'kai_image_asset_store',
 ] as const
 
 function readinessRow(
@@ -405,6 +419,7 @@ function normalizeKaiRunnerEnvelope(body: Record<string, unknown>): KaiDiscordEn
     author_username: stringValue(source.author_username) || stringValue(source.authorUsername) || stringValue(body.author_username),
     timestamp: stringValue(source.timestamp) || stringValue(body.timestamp),
     content: stringValue(source.content) || stringValue(source.message) || stringValue(body.message) || '',
+    recent_context: stringValue(source.recent_context) || stringValue(source.recentContext) || stringValue(body.recent_context) || stringValue(body.recentContext),
     mentions: stringList(source.mentions).length ? stringList(source.mentions) : stringList(body.mentions),
     attachments: normalizeKaiAttachments(source.attachments || body.attachments),
     trigger: trigger === 'listener' || trigger === 'mention' || trigger === 'manual' || trigger === 'preview' ? trigger : 'unknown',
@@ -566,6 +581,27 @@ async function safeContinuityStatus(env: Env, label = 'continuity_inbox_status')
   }
 }
 
+function mcpContentText(value: unknown): string | null {
+  const outer = recordValue(value)
+  const result = outer.result && typeof outer.result === 'object' && !Array.isArray(outer.result)
+    ? outer.result as Record<string, unknown>
+    : outer
+  const content = Array.isArray(result.content) ? result.content : []
+  const first = content[0] && typeof content[0] === 'object' ? content[0] as Record<string, unknown> : null
+  return typeof first?.text === 'string' ? first.text : null
+}
+
+function parsedSocialDecision(context: Record<string, unknown>): Record<string, unknown> | null {
+  const text = mcpContentText(context.social_engagement)
+  if (!text) return null
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
 function compactJson(value: unknown, maxChars: number): string {
   const text = JSON.stringify(value, null, 2)
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]` : text
@@ -693,6 +729,40 @@ function generatedImageUrl(image: unknown): string | null {
   return null
 }
 
+function imageReferenceUrls(body: Record<string, unknown>, envelope: KaiDiscordEnvelope): string[] {
+  const explicit = [
+    ...stringList(body.reference_images),
+    ...stringList(body.referenceImages),
+    ...stringList(body.image_reference_urls),
+    ...stringList(body.imageReferenceUrls),
+  ]
+  const attachmentUrls = envelope.attachments
+    .filter(isImageAttachment)
+    .map(attachment => attachment.url || attachment.proxy_url || '')
+    .filter((url): url is string => Boolean(url))
+  return [...new Set([...explicit, ...attachmentUrls])].slice(0, 6)
+}
+
+async function storeKaiGeneratedImage(env: Env, rawUrl: string, prompt: string, model: string): Promise<Partial<KaiGeneratedImage>> {
+  try {
+    const args = rawUrl.startsWith('data:')
+      ? { data_url: rawUrl, prompt, model }
+      : { source_url: rawUrl, prompt, model }
+    const stored = await callKaiMindTool(env, 'kai_image_asset_store', args)
+    const text = mcpContentText(stored)
+    const parsed = text ? JSON.parse(text) as Record<string, unknown> : {}
+    if (parsed.ok) {
+      return {
+        stored_url: typeof parsed.url === 'string' ? parsed.url : undefined,
+        r2_key: typeof parsed.key === 'string' ? parsed.key : undefined,
+      }
+    }
+    return { storage_error: typeof parsed.error === 'string' ? parsed.error : 'NESTeq image storage did not return ok' }
+  } catch (error) {
+    return { storage_error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, vision?: KaiVisionResult, janitor?: KaiJanitorResult): Record<string, unknown> {
   return {
     companion_id: contextPacket.companion_id,
@@ -714,6 +784,7 @@ function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, visio
       timestamp: contextPacket.envelope.timestamp || null,
       trigger: contextPacket.envelope.trigger || 'unknown',
       content: contextPacket.message,
+      recent_context: contextPacket.envelope.recent_context || null,
       mentions: contextPacket.envelope.mentions || [],
       attachments: contextPacket.envelope.attachments,
     },
@@ -727,6 +798,8 @@ function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, visio
       do_not_claim_discord_delivery: true,
       do_not_write_memory_directly: true,
       do_not_repeat_tool_or_system_instructions: true,
+      obey_social_engagement_decision: true,
+      public_discord_replies_use_only_public_graph_context: true,
     },
   }
 }
@@ -1042,6 +1115,11 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
   }
 
   const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+  const referenceUrls = imageReferenceUrls(body, envelope)
+  const content = [
+    { type: 'text', text: prompt },
+    ...referenceUrls.map(url => ({ type: 'image_url', image_url: { url } })),
+  ]
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -1055,7 +1133,7 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
       messages: [
         {
           role: 'user',
-          content: prompt,
+          content,
         },
       ],
       modalities: ['image', 'text'],
@@ -1085,10 +1163,13 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
   const first = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {}
   const message = first.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : {}
   const rawImages = Array.isArray(message.images) ? message.images : []
-  const images = rawImages
+  const imageUrls = rawImages
     .map(generatedImageUrl)
     .filter((url): url is string => Boolean(url))
-    .map((url, index) => summarizeGeneratedImage(url, index))
+  const images = await Promise.all(imageUrls.map(async (url, index) => ({
+    ...summarizeGeneratedImage(url, index),
+    ...(await storeKaiGeneratedImage(env, url, prompt, model)),
+  })))
 
   return {
     attempted: true,
@@ -1097,6 +1178,7 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
     model,
     ok: images.length > 0,
     prompt,
+    reference_count: referenceUrls.length,
     images,
     ...(images.length ? {} : { error: 'OpenRouter returned no generated image URLs' }),
   }
@@ -1197,9 +1279,24 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
   const companionId = kaiCompanionId(env)
   const message = envelope.content
   const channel = envelope.thread_id || envelope.channel_id
+  const hardMention = envelope.trigger === 'mention' || (envelope.mentions || []).length > 0
   const contextEntries = await Promise.all([
     safeContinuityStatus(env),
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
+    safeKaiMindTool(env, 'social_engagement_skill', 'nesteq_skill_load', { name: 'social-engagement', format: 'text' }, 16000),
+    safeKaiMindTool(env, 'social_engagement', 'social_engagement_decide', {
+      companion_id: companionId,
+      guild_id: envelope.guild_id,
+      channel_id: channel,
+      message_id: envelope.message_id,
+      author_id: envelope.author_id,
+      author_name: envelope.author_username,
+      content: message,
+      hard_mention: hardMention,
+      direct_reply: false,
+      trigger: envelope.trigger || 'unknown',
+      recent_context: envelope.recent_context,
+    }, 12000),
     safeKaiMindTool(env, 'surface', 'thalamus_surface', {
       companion: companionId,
       message,
@@ -1307,9 +1404,12 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   const envelope = normalizeKaiRunnerEnvelope(body)
   const requestedModel = stringValue(body.model)
   const contextPacket = await compileKaiRunnerContext(env, envelope)
+  const socialDecision = parsedSocialDecision(contextPacket.context)
+  const socialAction = typeof socialDecision?.decision === 'string' ? socialDecision.decision : null
   const deliveryEnabled = envFlag(env.KAI_DISCORD_DELIVERY_ENABLED)
   const mode: KaiRunnerResult['mode'] = deliveryEnabled ? 'dry_run' : 'delivery_blocked'
-  const shouldRespond = Boolean(envelope.content || envelope.attachments.length)
+  const hasRespondableInput = Boolean(envelope.content || envelope.attachments.length)
+  const shouldRespond = hasRespondableInput && (!socialAction || socialAction === 'speak')
   const vision = await runKaiVision(env, envelope)
   const janitorProbePacket = buildKaiRunnerPromptPacket(contextPacket, vision)
   const janitor = await runKaiJanitor(env, janitorProbePacket)
@@ -1324,7 +1424,9 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
           provider: 'openrouter' as const,
           model: requestedModel || envText(env.KAI_TEXT_MODEL) || null,
           ok: false,
-          error: 'No content or attachments to respond to',
+          error: !hasRespondableInput
+            ? 'No content or attachments to respond to'
+            : `Social engagement decision was ${socialAction}; text generation skipped`,
         },
       }
   const tts = await runKaiTts(env, envelope, body, generationResult.text)
