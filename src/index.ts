@@ -180,6 +180,7 @@ interface KaiRunnerResult {
   context: Record<string, unknown>
   prompt_packet?: Record<string, unknown>
   vision: KaiVisionResult
+  image_generation: KaiImageGenerationResult
   janitor: KaiJanitorResult
   generation: KaiTextGenerationResult
   allowed_tools: string[]
@@ -202,6 +203,25 @@ interface KaiVisionResult {
   ok: boolean
   summaries: KaiVisionSummary[]
   skipped: KaiRunnerAttachment[]
+  error?: string
+}
+
+interface KaiGeneratedImage {
+  index: number
+  mime_type?: string
+  data_url_preview?: string
+  url?: string
+  byte_length_estimate?: number
+}
+
+interface KaiImageGenerationResult {
+  attempted: boolean
+  enabled: boolean
+  provider: 'disabled' | 'openrouter' | string
+  model: string | null
+  ok: boolean
+  prompt: string | null
+  images: KaiGeneratedImage[]
   error?: string
 }
 
@@ -520,6 +540,52 @@ function isImageAttachment(attachment: KaiRunnerAttachment): boolean {
   if (type.startsWith('image/')) return true
   const name = String(attachment.filename || attachment.url || '').toLowerCase()
   return /\.(png|jpe?g|webp|gif)$/i.test(name)
+}
+
+function extractKaiImagePrompt(body: Record<string, unknown>, envelope: KaiDiscordEnvelope): string | null {
+  const explicitPrompt =
+    stringValue(body.image_prompt) ||
+    stringValue(body.imagePrompt) ||
+    stringValue(body.generate_image_prompt) ||
+    stringValue(body.generateImagePrompt)
+  if (explicitPrompt) return explicitPrompt
+
+  const explicitFlag = body.generate_image === true || body.generateImage === true || body.image_generation === true
+  const content = envelope.content.trim()
+  if (explicitFlag && content) return content
+  if (/\b(generate|create|draw|make|render)\b[\s\S]{0,120}\b(image|picture|art|illustration|photo)\b/i.test(content)) return content
+  if (/\b(image|picture|art|illustration|photo)\b[\s\S]{0,120}\b(generate|create|draw|make|render)\b/i.test(content)) return content
+  return null
+}
+
+function summarizeGeneratedImage(rawUrl: string, index: number): KaiGeneratedImage {
+  const dataUrlMatch = rawUrl.match(/^data:([^;,]+);base64,(.*)$/)
+  if (dataUrlMatch) {
+    const base64Length = dataUrlMatch[2]?.length || 0
+    return {
+      index,
+      mime_type: dataUrlMatch[1],
+      data_url_preview: rawUrl.slice(0, 96),
+      byte_length_estimate: Math.floor(base64Length * 0.75),
+    }
+  }
+
+  return {
+    index,
+    url: rawUrl.slice(0, 2000),
+  }
+}
+
+function generatedImageUrl(image: unknown): string | null {
+  if (!image || typeof image !== 'object' || Array.isArray(image)) return null
+  const record = image as Record<string, unknown>
+  const imageUrl = record.image_url || record.imageUrl
+  if (typeof imageUrl === 'string') return imageUrl
+  if (imageUrl && typeof imageUrl === 'object' && !Array.isArray(imageUrl)) {
+    const nested = imageUrl as Record<string, unknown>
+    return typeof nested.url === 'string' ? nested.url : null
+  }
+  return null
 }
 
 function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, vision?: KaiVisionResult, janitor?: KaiJanitorResult): Record<string, unknown> {
@@ -844,6 +910,88 @@ async function runKaiVision(env: Env, envelope: KaiDiscordEnvelope): Promise<Kai
   }
 }
 
+async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, body: Record<string, unknown>): Promise<KaiImageGenerationResult> {
+  const provider = (env.KAI_IMAGE_PROVIDER || 'disabled').trim().toLowerCase()
+  const enabled = Boolean(provider && provider !== 'disabled')
+  const model = env.KAI_IMAGE_MODEL || null
+  const prompt = extractKaiImagePrompt(body, envelope)
+  if (!enabled) {
+    return { attempted: false, enabled: false, provider: 'disabled', model, ok: false, prompt, images: [], error: prompt ? 'Image generation lane disabled' : undefined }
+  }
+  if (provider !== 'openrouter') {
+    return { attempted: false, enabled: true, provider, model, ok: false, prompt, images: [], error: `Unsupported image generation provider: ${provider}` }
+  }
+  if (!model) {
+    return { attempted: false, enabled: true, provider, model, ok: false, prompt, images: [], error: 'KAI_IMAGE_MODEL is not configured' }
+  }
+  if (!env.OPENROUTER_API_KEY) {
+    return { attempted: false, enabled: true, provider, model, ok: false, prompt, images: [], error: 'OPENROUTER_API_KEY is not configured' }
+  }
+  if (!prompt) {
+    return { attempted: false, enabled: true, provider, model, ok: true, prompt: null, images: [] }
+  }
+
+  const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
+      'X-OpenRouter-Title': 'Nexus Kai Runner',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      modalities: ['image', 'text'],
+      stream: false,
+    }),
+  })
+  const text = await response.text()
+  let data: unknown = text
+  try {
+    data = JSON.parse(text)
+  } catch {}
+  if (!response.ok) {
+    return {
+      attempted: true,
+      enabled: true,
+      provider,
+      model,
+      ok: false,
+      prompt,
+      images: [],
+      error: `OpenRouter image generation ${response.status}: ${typeof data === 'string' ? data.slice(0, 500) : compactJson(data, 500)}`,
+    }
+  }
+
+  const record = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  const first = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {}
+  const message = first.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : {}
+  const rawImages = Array.isArray(message.images) ? message.images : []
+  const images = rawImages
+    .map(generatedImageUrl)
+    .filter((url): url is string => Boolean(url))
+    .map((url, index) => summarizeGeneratedImage(url, index))
+
+  return {
+    attempted: true,
+    enabled: true,
+    provider,
+    model,
+    ok: images.length > 0,
+    prompt,
+    images,
+    ...(images.length ? {} : { error: 'OpenRouter returned no generated image URLs' }),
+  }
+}
+
 async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiRunnerContextPacket> {
   const companionId = kaiCompanionId(env)
   const message = envelope.content
@@ -963,6 +1111,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   const vision = await runKaiVision(env, envelope)
   const janitorProbePacket = buildKaiRunnerPromptPacket(contextPacket, vision)
   const janitor = await runKaiJanitor(env, janitorProbePacket)
+  const imageGeneration = await runKaiImageGeneration(env, envelope, body)
   const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor)
   const generationResult = shouldRespond
     ? await generateKaiText(env, promptPacket)
@@ -996,6 +1145,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
     context: contextPacket.context,
     prompt_packet: truncateKaiContext(promptPacket, 12000) as Record<string, unknown>,
     vision,
+    image_generation: imageGeneration,
     janitor,
     generation: generationResult.generation,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
@@ -1054,6 +1204,8 @@ export default {
           kai_text_model_configured: Boolean(env.KAI_TEXT_MODEL && env.OPENROUTER_API_KEY),
           kai_vision_enabled: Boolean(env.KAI_VISION_PROVIDER && env.KAI_VISION_PROVIDER !== 'disabled'),
           kai_vision_configured: Boolean(env.KAI_VISION_PROVIDER === 'openrouter' && env.KAI_VISION_MODEL && env.OPENROUTER_API_KEY),
+          kai_image_enabled: Boolean(env.KAI_IMAGE_PROVIDER && env.KAI_IMAGE_PROVIDER !== 'disabled'),
+          kai_image_configured: Boolean(env.KAI_IMAGE_PROVIDER === 'openrouter' && env.KAI_IMAGE_MODEL && env.OPENROUTER_API_KEY),
           kai_janitor_enabled: Boolean(env.KAI_JANITOR_PROVIDER && env.KAI_JANITOR_PROVIDER !== 'disabled'),
           kai_janitor_configured: env.KAI_JANITOR_PROVIDER === 'ollama'
             ? Boolean(env.KAI_JANITOR_MODEL && env.KAI_JANITOR_URL)
@@ -1104,6 +1256,17 @@ export default {
           note: !env.KAI_VISION_PROVIDER || env.KAI_VISION_PROVIDER === 'disabled'
             ? 'vision/OCR disabled by default'
             : 'image attachment summarization configured',
+          last_checked: new Date().toISOString(),
+        },
+        {
+          id: 'kai_image_generation',
+          label: 'Kai / Image Generation',
+          status: !env.KAI_IMAGE_PROVIDER || env.KAI_IMAGE_PROVIDER === 'disabled'
+            ? 'not_configured'
+            : ((env.KAI_IMAGE_PROVIDER === 'openrouter' && env.KAI_IMAGE_MODEL && env.OPENROUTER_API_KEY) ? 'ok' : 'not_configured'),
+          note: !env.KAI_IMAGE_PROVIDER || env.KAI_IMAGE_PROVIDER === 'disabled'
+            ? 'image generation disabled by default'
+            : 'image generation configured through OpenRouter',
           last_checked: new Date().toISOString(),
         },
         {

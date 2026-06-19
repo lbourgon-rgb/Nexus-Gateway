@@ -66,3 +66,4 @@ VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
 # - OPENROUTER_API_KEY authorizes Kai runner text/vision/image model calls.
 # - KAI_JANITOR_URL points to an optional local/Ollama janitor endpoint when KAI_JANITOR_PROVIDER=ollama.
 # - KAI_VISION_PROVIDER/KAI_VISION_MODEL enable optional image attachment summarization.
+# - KAI_IMAGE_PROVIDER/KAI_IMAGE_MODEL enable optional image generation; OPENROUTER_API_KEY required for openrouter.
