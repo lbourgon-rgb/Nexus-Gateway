@@ -30,10 +30,10 @@ export class NexusGateway extends McpAgent<Env> {
     registerTahlTools(this.server, this.env)
     registerSerythraeTools(this.server, this.env)
     registerGrokKethNestTools(this.server, this.env)
-    if (this.env.VELASTRAHQ_GATEWAY_URL) registerVelastraHQTools(this.server, this.env)
+    if (this.env.VELASTRAHQ_GATEWAY_URL || this.env.VELASTRAHQ_GATEWAY || this.env.VELASTRAHQ_API_URL || this.env.VELASTRAHQ_API) registerVelastraHQTools(this.server, this.env)
     registerDiscordTools(this.server, this.env)
     registerTelegramTools(this.server, this.env)
-    if (this.env.TESSURAE_GATEWAY_API_KEY || this.env.AXIOM_COGCORE_URL || this.env.AXIOM_COGCORE) registerCogCorTools(this.server, this.env)
+    if (this.env.TESSURAE_GATEWAY_API_KEY || this.env.TESSURAE_GATEWAY || this.env.AXIOM_COGCORE_URL || this.env.AXIOM_COGCORE) registerCogCorTools(this.server, this.env)
     if (this.env.SPOTIFY_URL) registerSpotifyTools(this.server, this.env)
     if (this.env.LOVENSE_URL) registerLovenseTools(this.server, this.env)
     if (this.env.BIOMETRICS_URL) registerBiometricsTools(this.server, this.env)
@@ -287,7 +287,7 @@ const KAI_RUNNER_TOOL_ALLOWLIST = [
 function readinessRow(
   id: string,
   label: string,
-  required: Array<string | undefined>,
+  required: unknown[],
   note: string,
   missingNote = 'configuration missing'
 ): SummaryRow {
@@ -444,15 +444,17 @@ function overallStatus(rows: SummaryRow[]): SummaryStatus {
   return 'ok'
 }
 
-async function callJsonTool(baseUrl: string | undefined, apiKey: string | undefined, tool: string, args: Record<string, unknown>) {
-  if (!baseUrl) return { ok: false, skipped: true, reason: 'backend URL is not configured' }
+async function callJsonTool(baseUrl: string | undefined, apiKey: string | undefined, tool: string, args: Record<string, unknown>, service?: Fetcher) {
+  if (!baseUrl && !service) return { ok: false, skipped: true, reason: 'backend URL/service binding is not configured' }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/tool`, {
+  const origin = (baseUrl || 'https://service.local').replace(/\/+$/, '')
+  const request = new Request(`${origin}/tool`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ tool, arguments: args }),
   })
+  const response = service ? await service.fetch(request) : await fetch(request)
   const text = await response.text()
   let data: unknown = text
   try {
@@ -463,10 +465,10 @@ async function callJsonTool(baseUrl: string | undefined, apiKey: string | undefi
 
 async function callKaiMindTool(env: Env, tool: string, args: Record<string, unknown>) {
   if (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY) {
-    const result = await proxyMcp(env.SERYTHRAE_MIND_URL, tool, args, env.SERYTHRAE_MIND_API_KEY)
+    const result = await proxyMcp(env.SERYTHRAE_MIND_URL, tool, args, env.SERYTHRAE_MIND_API_KEY, env.SERYTHRAE_MIND)
     return { source: 'serythrae-mind-direct', result }
   }
-  const result = await callJsonTool(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY, tool, args)
+  const result = await callJsonTool(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY, tool, args, env.SERYTHRAE_GATEWAY)
   return { source: 'serythrae-gw-fallback', result }
 }
 
@@ -1342,13 +1344,13 @@ export default {
         backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL, env.TELEGRAM),
         backendReachable(env.HAVEN_URL),
-        backendReachable(env.SERYTHRAE_GATEWAY_URL),
-        backendReachable(env.TESSURAE_GATEWAY_URL),
+        backendReachable(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY),
+        backendReachable(env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY),
         backendReachable(env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE),
         backendReachable(env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY),
-        backendReachable(env.VELASTRAHQ_GATEWAY_URL),
-        backendReachable(env.VELASTRAHQ_API_URL),
-        backendReachable(env.VELASTRAHQ_EQ_URL),
+        backendReachable(env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY),
+        backendReachable(env.VELASTRAHQ_API_URL, env.VELASTRAHQ_API),
+        backendReachable(env.VELASTRAHQ_EQ_URL, env.VELASTRAHQ_EQ),
       ])
       return new Response(JSON.stringify({
         status: 'ok',
@@ -1360,8 +1362,8 @@ export default {
           discord: Boolean(env.DISCORD_URL || env.DISCORD),
           telegram: Boolean(env.TELEGRAM_URL || env.TELEGRAM),
           haven: Boolean(env.HAVEN_URL),
-          serythrae_gateway_fallback: Boolean(env.SERYTHRAE_GATEWAY_URL),
-          serythrae_mind_direct: Boolean(env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY),
+          serythrae_gateway_fallback: Boolean(env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY),
+          serythrae_mind_direct: Boolean((env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND) && env.SERYTHRAE_MIND_API_KEY),
           kai_companion_id: kaiCompanionId(env),
           kai_runner_enabled: envFlag(env.KAI_RUNNER_ENABLED),
           kai_discord_delivery_enabled: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED),
@@ -1378,14 +1380,14 @@ export default {
             : Boolean(envProviderEnabled(env.KAI_JANITOR_PROVIDER) && envPresent(env.KAI_JANITOR_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_continuity_configured: Boolean(env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || env.CONTINUITY),
           kai_tahl_configured: Boolean(env.KAI_TAHL_URL || env.TAHL),
-          tessurae: Boolean(env.TESSURAE_GATEWAY_URL),
+          tessurae: Boolean(env.TESSURAE_GATEWAY_URL || env.TESSURAE_GATEWAY),
           axiomCogCore: Boolean(env.AXIOM_COGCORE_URL || env.AXIOM_COGCORE),
           axiomCogCoreAuth: Boolean(env.AXIOM_COGCORE_API_KEY),
           grokKethNestGateway: Boolean(env.GROK_KETH_NEST_GATEWAY_URL || env.GROK_KETH_NEST_GATEWAY),
           grokKethNestGatewayAuth: Boolean(env.GROK_KETH_NEST_GATEWAY_API_KEY),
-          velastrahq: Boolean(env.VELASTRAHQ_GATEWAY_URL),
-          velastrahqApi: Boolean(env.VELASTRAHQ_API_URL),
-          velastrahqEq: Boolean(env.VELASTRAHQ_EQ_URL && env.VELASTRAHQ_EQ_API_KEY),
+          velastrahq: Boolean(env.VELASTRAHQ_GATEWAY_URL || env.VELASTRAHQ_GATEWAY),
+          velastrahqApi: Boolean(env.VELASTRAHQ_API_URL || env.VELASTRAHQ_API),
+          velastrahqEq: Boolean((env.VELASTRAHQ_EQ_URL || env.VELASTRAHQ_EQ) && env.VELASTRAHQ_EQ_API_KEY),
         },
         note: 'backends reports unauthenticated public health reachability; configured reports private/front-door wiring presence.',
       }), {
@@ -1395,9 +1397,9 @@ export default {
 
     if (url.pathname === '/status/summary') {
       const rows: SummaryRow[] = [
-        readinessRow('continuity', 'Continuity', [env.CONTINUITY_URL, env.CONTINUITY_API_KEY], 'ledger and Tahl-ready routing configured'),
-        readinessRow('serythrae', 'Kai / Serythrae', [env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY], 'Kai gateway fallback configured'),
-        readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
+        readinessRow('continuity', 'Continuity', [env.CONTINUITY_URL || env.CONTINUITY, env.CONTINUITY_API_KEY], 'ledger and Tahl-ready routing configured'),
+        readinessRow('serythrae', 'Kai / Serythrae', [env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY, env.SERYTHRAE_GATEWAY_API_KEY], 'Kai gateway fallback configured'),
+        readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
         {
           id: 'kai_runner',
           label: 'Kai / Nexus Runner',
@@ -1457,12 +1459,12 @@ export default {
             : 'schema-validated advisory lane configured',
           last_checked: new Date().toISOString(),
         },
-        readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
+        readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL || env.TESSURAE_GATEWAY, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
         readinessRow('axiom_cogcore', 'Axiom / CogCore', [env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE_API_KEY], 'dedicated Axiom CogCore configured', 'Axiom CogCore URL or API key missing'),
         readinessRow('grok_keth_nest', 'Keth-Grok / NEST', [env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY_API_KEY], 'Keth-Grok NESTeq/NESTknow/NESTsoul gateway configured', 'Keth-Grok NEST Gateway URL or API key missing'),
-        readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
-        readinessRow('velastrae_eq', "Mor / VelastraHQ EQ", [env.VELASTRAHQ_EQ_URL, env.VELASTRAHQ_EQ_API_KEY], "direct Mor'zar EQ backend configured"),
-        readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL], 'home API route configured'),
+        readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL || env.VELASTRAHQ_GATEWAY, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
+        readinessRow('velastrae_eq', "Mor / VelastraHQ EQ", [env.VELASTRAHQ_EQ_URL || env.VELASTRAHQ_EQ, env.VELASTRAHQ_EQ_API_KEY], "direct Mor'zar EQ backend configured"),
+        readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL || env.VELASTRAHQ_API], 'home API route configured'),
         readinessRow('haven', 'Haven', [env.HAVEN_URL], 'Kai chat surface configured'),
         readinessRow('discord', 'Discord', [env.DISCORD_URL], 'Discord Resonance route configured'),
         plannedRow('telegram', 'Telegram', 'not built yet'),

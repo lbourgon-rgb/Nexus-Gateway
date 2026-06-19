@@ -33,17 +33,20 @@ export async function proxyRest(
   url: string | undefined,
   body: Record<string, unknown> = {},
   method: string = 'POST',
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  service?: Fetcher
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
-  if (!url) {
+  if (!url && !service) {
     return { content: [{ type: 'text', text: 'Backend URL is not configured for this Nexus tool.' }] }
   }
 
-  const response = await fetch(url, {
+  const target = url || 'https://service.local'
+  const request = new Request(target, {
     method,
     headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: method !== 'GET' ? JSON.stringify(body) : undefined,
   })
+  const response = service ? await service.fetch(request) : await fetch(request)
 
   const text = await response.text()
   let result: string

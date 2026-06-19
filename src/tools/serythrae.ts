@@ -16,18 +16,18 @@ function requireKai(companionInput: unknown) {
 
 function serythraeMcp(env: Env, toolName: string, args: Record<string, unknown>) {
   if (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY) {
-    return proxyMcp(env.SERYTHRAE_MIND_URL, toolName, args, env.SERYTHRAE_MIND_API_KEY)
+    return proxyMcp(env.SERYTHRAE_MIND_URL, toolName, args, env.SERYTHRAE_MIND_API_KEY, env.SERYTHRAE_MIND)
   }
-  return proxyMcp(env.SERYTHRAE_GATEWAY_URL, toolName, args, env.SERYTHRAE_GATEWAY_API_KEY)
+  return proxyMcp(env.SERYTHRAE_GATEWAY_URL, toolName, args, env.SERYTHRAE_GATEWAY_API_KEY, env.SERYTHRAE_GATEWAY)
 }
 
 export function registerSerythraeTools(server: McpServer, env: Env) {
   server.tool('serythrae_status', 'Read Serythrae gateway health for Kai/NESTeq routing.', {}, async () => {
     const direct = env.SERYTHRAE_MIND_URL
-      ? await proxyRest(`${env.SERYTHRAE_MIND_URL.replace(/\/+$/, '')}/health`, {}, 'GET')
+      ? await proxyRest(`${env.SERYTHRAE_MIND_URL.replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_MIND)
       : { content: [{ type: 'text' as const, text: 'Direct Serythrae mind URL is not configured.' }] }
     const gateway = env.SERYTHRAE_GATEWAY_URL
-      ? await proxyRest(`${env.SERYTHRAE_GATEWAY_URL.replace(/\/+$/, '')}/health`, {}, 'GET')
+      ? await proxyRest(`${env.SERYTHRAE_GATEWAY_URL.replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_GATEWAY)
       : { content: [{ type: 'text' as const, text: 'Serythrae gateway fallback URL is not configured.' }] }
     return {
       content: [{

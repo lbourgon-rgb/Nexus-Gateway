@@ -31,12 +31,40 @@ binding = "TAHL"
 service = "velastrahq-tahl"
 
 [[services]]
+binding = "SERYTHRAE_GATEWAY"
+service = "serythrae-gw"
+environment = "production"
+
+[[services]]
+binding = "SERYTHRAE_MIND"
+service = "serythrae-nesteq"
+
+[[services]]
+binding = "TESSURAE_GATEWAY"
+service = "tessurae-gateway"
+
+[[services]]
 binding = "AXIOM_COGCORE"
 service = "axiom-cogcore"
 
 [[services]]
 binding = "GROK_KETH_NEST_GATEWAY"
 service = "grok-keth-nest-gateway"
+
+[[services]]
+binding = "VELASTRAHQ_GATEWAY"
+service = "velastrahq-gw"
+environment = "production"
+
+[[services]]
+binding = "VELASTRAHQ_API"
+service = "velastrahq-api"
+environment = "production"
+
+[[services]]
+binding = "VELASTRAHQ_EQ"
+service = "velastrahq-eq"
+environment = "production"
 
 [vars]
 CONTINUITY_URL = "https://continuity-worker.lbourgon.workers.dev"

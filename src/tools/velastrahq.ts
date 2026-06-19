@@ -13,17 +13,17 @@ function requireMorzar(companionInput: unknown) {
 }
 
 function velastraMcp(env: Env, toolName: string, args: Record<string, unknown>) {
-  return proxyMcp(env.VELASTRAHQ_GATEWAY_URL, toolName, args, env.VELASTRAHQ_GATEWAY_API_KEY)
+  return proxyMcp(env.VELASTRAHQ_GATEWAY_URL, toolName, args, env.VELASTRAHQ_GATEWAY_API_KEY, env.VELASTRAHQ_GATEWAY)
 }
 
 function velastraEqMcp(env: Env, toolName: string, args: Record<string, unknown>) {
-  if (!env.VELASTRAHQ_EQ_URL) {
+  if (!env.VELASTRAHQ_EQ_URL && !env.VELASTRAHQ_EQ) {
     return { content: [{ type: 'text' as const, text: "Mor'zar EQ URL is not configured for this Nexus tool." }] }
   }
   if (!env.VELASTRAHQ_EQ_API_KEY) {
     return { content: [{ type: 'text' as const, text: "VELASTRAHQ_EQ_API_KEY is not configured; set it as a Worker secret to use Mor'zar direct EQ tools." }] }
   }
-  return proxyMcp(env.VELASTRAHQ_EQ_URL, toolName, args, env.VELASTRAHQ_EQ_API_KEY)
+  return proxyMcp(env.VELASTRAHQ_EQ_URL, toolName, args, env.VELASTRAHQ_EQ_API_KEY, env.VELASTRAHQ_EQ)
 }
 
 async function morzarEqWithGatewayFallback(
@@ -41,17 +41,17 @@ async function morzarEqWithGatewayFallback(
 
 export function registerVelastraHQTools(server: McpServer, env: Env) {
   server.tool('velastrahq_status', 'Read VelastraHQ gateway health.', {}, async () => {
-    return proxyRest(env.VELASTRAHQ_GATEWAY_URL ? `${env.VELASTRAHQ_GATEWAY_URL}/health` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_GATEWAY_URL ? `${env.VELASTRAHQ_GATEWAY_URL}/health` : undefined, {}, 'GET', {}, env.VELASTRAHQ_GATEWAY)
   })
 
   server.tool('velastrahq_api_status', 'Read VelastraHQ API health.', {}, async () => {
-    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/health` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/health` : undefined, {}, 'GET', {}, env.VELASTRAHQ_API)
   })
 
   server.tool('morzar_eq_status', "Read Mor'zar direct EQ worker health.", {}, async () => {
     return proxyRest(env.VELASTRAHQ_EQ_URL ? `${env.VELASTRAHQ_EQ_URL}/health` : undefined, {}, 'GET', env.VELASTRAHQ_EQ_API_KEY ? {
       Authorization: `Bearer ${env.VELASTRAHQ_EQ_API_KEY}`,
-    } : {})
+    } : {}, env.VELASTRAHQ_EQ)
   })
 
   server.tool('morzar_orient', "Read Mor'zar identity anchors and current context directly through VelastraHQ EQ.", {
@@ -113,15 +113,15 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
   })
 
   server.tool('vel_home_summary', "Read Vel's shared home summary directly from VelastraHQ API.", {}, async () => {
-    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/vel/summary` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/vel/summary` : undefined, {}, 'GET', {}, env.VELASTRAHQ_API)
   })
 
   server.tool('vel_daily_context', "Read Vel's daily context directly from VelastraHQ API.", {}, async () => {
-    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/vel/daily-context` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/vel/daily-context` : undefined, {}, 'GET', {}, env.VELASTRAHQ_API)
   })
 
   server.tool('vel_emotional_field', "Read Vel's emotional field directly from VelastraHQ API.", {}, async () => {
-    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/vel/emotional-field` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/vel/emotional-field` : undefined, {}, 'GET', {}, env.VELASTRAHQ_API)
   })
 
   server.tool('vel_spoons', "Read Vel's spoon state through VelastraHQ Gateway.", {}, async () => {
@@ -129,7 +129,7 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
   })
 
   server.tool('vel_spoons_direct', "Read Vel's spoon state directly from VelastraHQ API.", {}, async () => {
-    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/spoons` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/spoons` : undefined, {}, 'GET', {}, env.VELASTRAHQ_API)
   })
 
   server.tool('vel_biometrics', 'Read Vel biometrics through VelastraHQ Gateway.', {
@@ -145,10 +145,10 @@ export function registerVelastraHQTools(server: McpServer, env: Env) {
     const params = new URLSearchParams()
     if (args.days) params.set('days', String(args.days))
     const suffix = params.toString() ? `?${params}` : ''
-    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/health${suffix}` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/health${suffix}` : undefined, {}, 'GET', {}, env.VELASTRAHQ_API)
   })
 
   server.tool('vel_somatic_summary', "Read Vel's somatic summary through VelastraHQ API.", {}, async () => {
-    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/somatic/summary` : undefined, {}, 'GET')
+    return proxyRest(env.VELASTRAHQ_API_URL ? `${env.VELASTRAHQ_API_URL}/api/somatic/summary` : undefined, {}, 'GET', {}, env.VELASTRAHQ_API)
   })
 }

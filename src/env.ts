@@ -4,8 +4,14 @@ export interface Env {
   DISCORD?: Fetcher
   TELEGRAM?: Fetcher
   TAHL?: Fetcher
+  SERYTHRAE_GATEWAY?: Fetcher
+  SERYTHRAE_MIND?: Fetcher
+  TESSURAE_GATEWAY?: Fetcher
   AXIOM_COGCORE?: Fetcher
   GROK_KETH_NEST_GATEWAY?: Fetcher
+  VELASTRAHQ_GATEWAY?: Fetcher
+  VELASTRAHQ_API?: Fetcher
+  VELASTRAHQ_EQ?: Fetcher
 
   // Lbourgon backend URLs (set in wrangler.toml [vars])
   CONTINUITY_URL?: string
