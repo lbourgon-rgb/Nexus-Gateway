@@ -352,10 +352,10 @@ const KAI_ONLY_MCP: McpTool[] = [
 function callRoutedCogCore(env: Env, companionInput: unknown, toolName: string, args: Record<string, unknown>) {
   const companionId = normalizeCompanionId(companionInput)
   if (companionId === 'lucien') {
-    if (!env.TESSURAE_GATEWAY_URL && !env.TESSURAE_GATEWAY) {
-      return { content: [{ type: 'text' as const, text: 'TESSURAE_GATEWAY_URL is not configured.' }] }
+    if (!env.TESSURAE_COGCORE_URL && !env.TESSURAE_COGCORE) {
+      return { content: [{ type: 'text' as const, text: 'TESSURAE_COGCORE_URL or TESSURAE_COGCORE service binding is not configured.' }] }
     }
-    return proxyMcp(env.TESSURAE_GATEWAY_URL, toolName, args, env.TESSURAE_GATEWAY_API_KEY, env.TESSURAE_GATEWAY)
+    return proxyMcp(env.TESSURAE_COGCORE_URL, toolName, args, env.TESSURAE_COGCORE_API_KEY, env.TESSURAE_COGCORE)
   }
   if (companionId === 'axiom') {
     if (!env.AXIOM_COGCORE_URL && !env.AXIOM_COGCORE) {

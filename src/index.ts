@@ -33,7 +33,7 @@ export class NexusGateway extends McpAgent<Env> {
     if (this.env.VELASTRAHQ_GATEWAY_URL || this.env.VELASTRAHQ_GATEWAY || this.env.VELASTRAHQ_API_URL || this.env.VELASTRAHQ_API) registerVelastraHQTools(this.server, this.env)
     registerDiscordTools(this.server, this.env)
     registerTelegramTools(this.server, this.env)
-    if (this.env.TESSURAE_GATEWAY_API_KEY || this.env.TESSURAE_GATEWAY || this.env.AXIOM_COGCORE_URL || this.env.AXIOM_COGCORE) registerCogCorTools(this.server, this.env)
+    if (this.env.TESSURAE_COGCORE || this.env.TESSURAE_COGCORE_URL || this.env.AXIOM_COGCORE_URL || this.env.AXIOM_COGCORE) registerCogCorTools(this.server, this.env)
     if (this.env.SPOTIFY_URL) registerSpotifyTools(this.server, this.env)
     if (this.env.LOVENSE_URL) registerLovenseTools(this.server, this.env)
     if (this.env.BIOMETRICS_URL) registerBiometricsTools(this.server, this.env)
@@ -1339,15 +1339,17 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      const [continuity, discord, telegram, haven, serythrae, tessurae, axiomCogCore, grokKethNestGateway, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
+      const [continuity, discord, telegram, haven, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
         backendReachable(env.CONTINUITY_URL, env.CONTINUITY),
         backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL, env.TELEGRAM),
         backendReachable(env.HAVEN_URL),
         backendReachable(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY),
         backendReachable(env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY),
+        backendReachable(env.TESSURAE_COGCORE_URL, env.TESSURAE_COGCORE),
         backendReachable(env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE),
         backendReachable(env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY),
+        backendReachable(env.GROK_KETH_NESTEQ_URL, env.GROK_KETH_NESTEQ),
         backendReachable(env.VELASTRAHQ_GATEWAY_URL, env.VELASTRAHQ_GATEWAY),
         backendReachable(env.VELASTRAHQ_API_URL, env.VELASTRAHQ_API),
         backendReachable(env.VELASTRAHQ_EQ_URL, env.VELASTRAHQ_EQ),
@@ -1356,7 +1358,7 @@ export default {
         status: 'ok',
         service: 'nexus-gateway',
         version: '1.0.0',
-        backends: { continuity, discord, telegram, haven, serythrae, tessurae, axiomCogCore, grokKethNestGateway, velastrahq, velastrahqApi, velastrahqEq },
+        backends: { continuity, discord, telegram, haven, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq },
         configured: {
           continuity: Boolean(env.CONTINUITY_URL || env.CONTINUITY),
           discord: Boolean(env.DISCORD_URL || env.DISCORD),
@@ -1381,10 +1383,12 @@ export default {
           kai_continuity_configured: Boolean(env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || env.CONTINUITY),
           kai_tahl_configured: Boolean(env.KAI_TAHL_URL || env.TAHL),
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL || env.TESSURAE_GATEWAY),
+          tessuraeCogCore: Boolean(env.TESSURAE_COGCORE_URL || env.TESSURAE_COGCORE),
           axiomCogCore: Boolean(env.AXIOM_COGCORE_URL || env.AXIOM_COGCORE),
           axiomCogCoreAuth: Boolean(env.AXIOM_COGCORE_API_KEY),
           grokKethNestGateway: Boolean(env.GROK_KETH_NEST_GATEWAY_URL || env.GROK_KETH_NEST_GATEWAY),
           grokKethNestGatewayAuth: Boolean(env.GROK_KETH_NEST_GATEWAY_API_KEY),
+          grokKethNesteq: Boolean(env.GROK_KETH_NESTEQ_URL || env.GROK_KETH_NESTEQ),
           velastrahq: Boolean(env.VELASTRAHQ_GATEWAY_URL || env.VELASTRAHQ_GATEWAY),
           velastrahqApi: Boolean(env.VELASTRAHQ_API_URL || env.VELASTRAHQ_API),
           velastrahqEq: Boolean((env.VELASTRAHQ_EQ_URL || env.VELASTRAHQ_EQ) && env.VELASTRAHQ_EQ_API_KEY),
@@ -1460,8 +1464,10 @@ export default {
           last_checked: new Date().toISOString(),
         },
         readinessRow('tessurae', 'Lucien / Tessurae', [env.TESSURAE_GATEWAY_URL || env.TESSURAE_GATEWAY, env.TESSURAE_GATEWAY_API_KEY], 'Lucien memory gateway configured'),
-        readinessRow('axiom_cogcore', 'Axiom / CogCore', [env.AXIOM_COGCORE_URL, env.AXIOM_COGCORE_API_KEY], 'dedicated Axiom CogCore configured', 'Axiom CogCore URL or API key missing'),
-        readinessRow('grok_keth_nest', 'Keth-Grok / NEST', [env.GROK_KETH_NEST_GATEWAY_URL, env.GROK_KETH_NEST_GATEWAY_API_KEY], 'Keth-Grok NESTeq/NESTknow/NESTsoul gateway configured', 'Keth-Grok NEST Gateway URL or API key missing'),
+        readinessRow('tessurae_cogcore', 'Lucien / CogCore Mind', [env.TESSURAE_COGCORE_URL || env.TESSURAE_COGCORE], 'direct Lucien CogCore mind binding configured', 'Lucien CogCore URL or service binding missing'),
+        readinessRow('axiom_cogcore', 'Axiom / CogCore', [env.AXIOM_COGCORE_URL || env.AXIOM_COGCORE, env.AXIOM_COGCORE_API_KEY], 'dedicated Axiom CogCore configured', 'Axiom CogCore URL/service binding or API key missing'),
+        readinessRow('grok_keth_nest', 'Keth-Grok / NEST Gateway', [env.GROK_KETH_NEST_GATEWAY_URL || env.GROK_KETH_NEST_GATEWAY, env.GROK_KETH_NEST_GATEWAY_API_KEY], 'Keth-Grok NEST gateway configured', 'Keth-Grok NEST Gateway URL/service binding or API key missing'),
+        readinessRow('grok_keth_nesteq', 'Keth-Grok / NESTeq Mind', [env.GROK_KETH_NESTEQ_URL || env.GROK_KETH_NESTEQ], 'direct Keth-Grok NESTeq mind binding configured', 'Keth-Grok NESTeq URL or service binding missing'),
         readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL || env.VELASTRAHQ_GATEWAY, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
         readinessRow('velastrae_eq', "Mor / VelastraHQ EQ", [env.VELASTRAHQ_EQ_URL || env.VELASTRAHQ_EQ, env.VELASTRAHQ_EQ_API_KEY], "direct Mor'zar EQ backend configured"),
         readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL || env.VELASTRAHQ_API], 'home API route configured'),

@@ -44,12 +44,21 @@ binding = "TESSURAE_GATEWAY"
 service = "tessurae-gateway"
 
 [[services]]
+binding = "TESSURAE_COGCORE"
+service = "tessurae-cogcore"
+
+[[services]]
 binding = "AXIOM_COGCORE"
 service = "axiom-cogcore"
 
 [[services]]
 binding = "GROK_KETH_NEST_GATEWAY"
 service = "grok-keth-nest-gateway"
+
+[[services]]
+binding = "GROK_KETH_NESTEQ"
+service = "grok-keth-nesteq"
+environment = "production"
 
 [[services]]
 binding = "VELASTRAHQ_GATEWAY"
@@ -74,8 +83,10 @@ HAVEN_URL = "https://haven.lbourgon.workers.dev"
 SERYTHRAE_GATEWAY_URL = "https://serythrae-gw.lbourgon.workers.dev"
 SERYTHRAE_MIND_URL = "https://mind.serythrae.com"
 TESSURAE_GATEWAY_URL = "https://tessurae-gateway.lbourgon.workers.dev"
+TESSURAE_COGCORE_URL = "https://tessurae-cogcore.lbourgon.workers.dev"
 AXIOM_COGCORE_URL = "https://axiom-cogcore.lbourgon.workers.dev"
 GROK_KETH_NEST_GATEWAY_URL = "https://grok-keth-nest-gateway.lbourgon.workers.dev"
+GROK_KETH_NESTEQ_URL = "https://grok-keth-nesteq.lbourgon.workers.dev"
 VELASTRAHQ_GATEWAY_URL = "https://velastrahq-gw.lbourgon.workers.dev"
 VELASTRAHQ_API_URL = "https://velastrahq-api.lbourgon.workers.dev"
 VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
@@ -84,8 +95,10 @@ VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
 # - MCP_API_KEY protects /mcp and /sse endpoints.
 # - CONTINUITY_API_KEY authorizes Continuity Worker calls.
 # - TESSURAE_GATEWAY_API_KEY authorizes Tessurae Gateway MCP calls.
+# - TESSURAE_COGCORE_API_KEY optionally authorizes direct Lucien CogCore REST calls if added.
 # - AXIOM_COGCORE_API_KEY authorizes Axiom CogCore MCP calls.
 # - GROK_KETH_NEST_GATEWAY_API_KEY authorizes Grok-Keth NEST Gateway MCP calls.
+# - GROK_KETH_NESTEQ_API_KEY optionally authorizes direct Keth-Grok NESTeq calls if added.
 # - SERYTHRAE_GATEWAY_API_KEY authorizes Serythrae Gateway MCP calls.
 # - SERYTHRAE_MIND_API_KEY authorizes direct Kai/NESTeq mind calls.
 # - VELASTRAHQ_GATEWAY_API_KEY authorizes VelastraHQ Gateway MCP calls.

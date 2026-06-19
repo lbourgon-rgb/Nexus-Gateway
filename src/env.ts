@@ -7,8 +7,10 @@ export interface Env {
   SERYTHRAE_GATEWAY?: Fetcher
   SERYTHRAE_MIND?: Fetcher
   TESSURAE_GATEWAY?: Fetcher
+  TESSURAE_COGCORE?: Fetcher
   AXIOM_COGCORE?: Fetcher
   GROK_KETH_NEST_GATEWAY?: Fetcher
+  GROK_KETH_NESTEQ?: Fetcher
   VELASTRAHQ_GATEWAY?: Fetcher
   VELASTRAHQ_API?: Fetcher
   VELASTRAHQ_EQ?: Fetcher
@@ -21,8 +23,10 @@ export interface Env {
   SERYTHRAE_GATEWAY_URL?: string
   SERYTHRAE_MIND_URL?: string
   TESSURAE_GATEWAY_URL?: string
+  TESSURAE_COGCORE_URL?: string
   AXIOM_COGCORE_URL?: string
   GROK_KETH_NEST_GATEWAY_URL?: string
+  GROK_KETH_NESTEQ_URL?: string
   VELASTRAHQ_GATEWAY_URL?: string
   VELASTRAHQ_API_URL?: string
   VELASTRAHQ_EQ_URL?: string
@@ -38,8 +42,10 @@ export interface Env {
   MCP_API_KEY?: string
   CONTINUITY_API_KEY?: string
   TESSURAE_GATEWAY_API_KEY?: string
+  TESSURAE_COGCORE_API_KEY?: string
   AXIOM_COGCORE_API_KEY?: string
   GROK_KETH_NEST_GATEWAY_API_KEY?: string
+  GROK_KETH_NESTEQ_API_KEY?: string
   SERYTHRAE_GATEWAY_API_KEY?: string
   SERYTHRAE_MIND_API_KEY?: string
   VELASTRAHQ_GATEWAY_API_KEY?: string

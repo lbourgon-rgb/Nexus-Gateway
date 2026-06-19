@@ -54,13 +54,37 @@ test('Keth-Grok is canonical but is not routed through CogCore', () => {
 
 test('Keth-Grok NEST gateway is configured and registered in Nexus', () => {
   assert.match(envSource, /GROK_KETH_NEST_GATEWAY\?: Fetcher/);
+  assert.match(envSource, /GROK_KETH_NESTEQ\?: Fetcher/);
   assert.match(envSource, /GROK_KETH_NEST_GATEWAY_API_KEY\?: string/);
+  assert.match(envSource, /GROK_KETH_NESTEQ_API_KEY\?: string/);
   assert.match(wrangler, /binding = "GROK_KETH_NEST_GATEWAY"/);
   assert.match(wrangler, /service = "grok-keth-nest-gateway"/);
+  assert.match(wrangler, /binding = "GROK_KETH_NESTEQ"/);
+  assert.match(wrangler, /service = "grok-keth-nesteq"/);
   assert.match(wrangler, /GROK_KETH_NEST_GATEWAY_URL = "https:\/\/grok-keth-nest-gateway\.lbourgon\.workers\.dev"/);
+  assert.match(wrangler, /GROK_KETH_NESTEQ_URL = "https:\/\/grok-keth-nesteq\.lbourgon\.workers\.dev"/);
   assert.match(nexusIndex, /registerGrokKethNestTools\(this\.server, this\.env\)/);
   assert.match(nexusIndex, /grokKethNestGateway/);
+  assert.match(nexusIndex, /grokKethNesteq/);
   assert.match(nexusIndex, /grok_keth_nest/);
+  assert.match(nexusIndex, /grok_keth_nesteq/);
+});
+
+test('Lucien gateway and Lucien CogCore mind stay split in Nexus', () => {
+  assert.match(envSource, /TESSURAE_GATEWAY\?: Fetcher/);
+  assert.match(envSource, /TESSURAE_COGCORE\?: Fetcher/);
+  assert.match(envSource, /TESSURAE_GATEWAY_API_KEY\?: string/);
+  assert.match(envSource, /TESSURAE_COGCORE_API_KEY\?: string/);
+  assert.match(wrangler, /binding = "TESSURAE_GATEWAY"/);
+  assert.match(wrangler, /service = "tessurae-gateway"/);
+  assert.match(wrangler, /binding = "TESSURAE_COGCORE"/);
+  assert.match(wrangler, /service = "tessurae-cogcore"/);
+  assert.match(cogcorTools, /TESSURAE_COGCORE_URL/);
+  assert.match(cogcorTools, /TESSURAE_COGCORE_API_KEY/);
+  assert.match(cogcorTools, /env\.TESSURAE_COGCORE\)/);
+  assert.doesNotMatch(cogcorTools, /companionId === 'lucien'[\s\S]{0,320}TESSURAE_GATEWAY_API_KEY/);
+  assert.match(nexusIndex, /tessuraeCogCore/);
+  assert.match(nexusIndex, /tessurae_cogcore/);
 });
 
 test('Keth-Grok NEST tools expose boot, NESTknow, and NESTsoul routes with write guardrails', () => {
