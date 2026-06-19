@@ -167,3 +167,25 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
     assert.ok(serythraeTools.includes(toolName), `missing ${toolName}`);
   }
 });
+
+test('Nexus exposes a sanitized Kai brain status endpoint for the UI', () => {
+  assert.match(envSource, /ARCHIVE\?: Fetcher/);
+  assert.match(envSource, /ARCHIVE_URL\?: string/);
+  assert.match(wrangler, /binding = "ARCHIVE"/);
+  assert.match(wrangler, /service = "archive-worker"/);
+  assert.match(nexusIndex, /\/api\/kaisoryth\/brain-status/);
+  assert.match(nexusIndex, /async function kaiBrainStatus/);
+  assert.match(nexusIndex, /\/api\/archive\/stats\?companion_id=/);
+  assert.match(nexusIndex, /\/mind-health/);
+  assert.match(nexusIndex, /\/knowledge\?scope=companion&limit=1/);
+  for (const expected of [
+    'archive_entries',
+    'active_threads',
+    'nestknow_entries',
+    'strength',
+    'entropy',
+    'memories',
+  ]) {
+    assert.ok(nexusIndex.includes(expected), `missing ${expected}`);
+  }
+});

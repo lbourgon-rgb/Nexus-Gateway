@@ -31,6 +31,10 @@ binding = "TAHL"
 service = "velastrahq-tahl"
 
 [[services]]
+binding = "ARCHIVE"
+service = "archive-worker"
+
+[[services]]
 binding = "SERYTHRAE_GATEWAY"
 service = "serythrae-gw"
 environment = "production"
@@ -80,6 +84,7 @@ CONTINUITY_URL = "https://continuity-worker.lbourgon.workers.dev"
 DISCORD_URL = "https://discord-companion-bot.lbourgon.workers.dev"
 TELEGRAM_URL = "https://telegram-cloud.lbourgon.workers.dev"
 HAVEN_URL = "https://haven.lbourgon.workers.dev"
+ARCHIVE_URL = "https://archive-worker.lbourgon.workers.dev"
 SERYTHRAE_GATEWAY_URL = "https://serythrae-gw.lbourgon.workers.dev"
 SERYTHRAE_MIND_URL = "https://mind.serythrae.com"
 TESSURAE_GATEWAY_URL = "https://tessurae-gateway.lbourgon.workers.dev"

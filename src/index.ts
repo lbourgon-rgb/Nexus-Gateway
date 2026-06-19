@@ -489,6 +489,40 @@ async function callContinuityJson(env: Env, path: string): Promise<unknown> {
   return response.ok ? body : { ok: false, status: response.status, body: text.slice(0, 500) }
 }
 
+async function fetchJsonFromBackend(
+  url: string | undefined,
+  service: Fetcher | undefined,
+  path: string,
+  headers: HeadersInit = {},
+): Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }> {
+  if (!url && !service) return { ok: false, error: 'backend URL/service binding is not configured' }
+  const base = (url || 'https://service.local').replace(/\/+$/, '')
+  try {
+    const response = service
+      ? await service.fetch(new Request(`${base}${path}`, { method: 'GET', headers }))
+      : await fetch(`${base}${path}`, { method: 'GET', headers })
+    const text = await response.text()
+    let data: unknown = text
+    try {
+      data = JSON.parse(text)
+    } catch {}
+    return response.ok
+      ? { ok: true, status: response.status, data }
+      : { ok: false, status: response.status, error: typeof data === 'string' ? data.slice(0, 500) : JSON.stringify(data).slice(0, 500) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function numericValue(value: unknown, fallback = 0): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
 function truncateKaiContext(value: unknown, maxChars: number): unknown {
   if (typeof value === 'string') {
     return value.length > maxChars
@@ -1328,6 +1362,71 @@ async function kaiRunnerPreview(request: Request, env: Env): Promise<Response> {
   return kaiRunnerRun(request, env)
 }
 
+async function kaiBrainStatus(env: Env): Promise<Response> {
+  const companionId = kaiCompanionId(env)
+  const authHeaders: Record<string, string> = { Accept: 'application/json' }
+  if (env.SERYTHRAE_MIND_API_KEY) authHeaders.Authorization = `Bearer ${env.SERYTHRAE_MIND_API_KEY}`
+
+  const [archiveResult, mindResult, knowledgeResult] = await Promise.all([
+    fetchJsonFromBackend(
+      env.ARCHIVE_URL,
+      env.ARCHIVE,
+      `/api/archive/stats?companion_id=${encodeURIComponent(companionId)}`,
+      { Accept: 'application/json' },
+    ),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/mind-health', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/knowledge?scope=companion&limit=1', authHeaders),
+  ])
+
+  const archive = recordValue(archiveResult.data)
+  const mind = recordValue(mindResult.data)
+  const knowledge = recordValue(knowledgeResult.data)
+  const knowledgeStatus = recordValue(knowledge.status)
+  const archiveEntries = numericValue(archive.total_messages)
+  const activeThreads = numericValue(mind.threads)
+  const nestknowFallback = Object.values(knowledgeStatus).reduce<number>((sum, value) => sum + numericValue(value), 0)
+  const nestknowEntries = numericValue(knowledge.total, nestknowFallback)
+  const memories = numericValue(mind.observations)
+  const avgStrength = numericValue(mind.avgStrength)
+  const entropy = numericValue(mind.entropy)
+
+  return new Response(JSON.stringify({
+    ok: archiveResult.ok && mindResult.ok && knowledgeResult.ok,
+    companion_id: companionId,
+    generated_at: new Date().toISOString(),
+    counts: {
+      archive_entries: archiveEntries,
+      active_threads: activeThreads,
+      nestknow_entries: nestknowEntries,
+      memories,
+    },
+    mind_health: {
+      strength: avgStrength,
+      entropy,
+      memories,
+      strong_memories: numericValue(mind.strongMemories),
+      fading_memories: numericValue(mind.fadingMemories),
+      faint_memories: numericValue(mind.faintMemories),
+      journals: numericValue(mind.journals),
+      identity: numericValue(mind.identity),
+      days_checked_in: numericValue(mind.daysCheckedIn),
+      current_mood: typeof mind.currentMood === 'string' ? mind.currentMood : null,
+      last_emotion: typeof mind.lastEmotion === 'string' ? mind.lastEmotion : null,
+    },
+    nestknow: {
+      status: knowledgeStatus,
+      categories: Array.isArray(knowledge.categories) ? knowledge.categories : [],
+    },
+    backends: {
+      archive: { ok: archiveResult.ok, status: archiveResult.status || null },
+      mind: { ok: mindResult.ok, status: mindResult.status || null },
+      nestknow: { ok: knowledgeResult.ok, status: knowledgeResult.status || null },
+    },
+  }, null, 2), {
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     let url = new URL(request.url)
@@ -1489,6 +1588,10 @@ export default {
 
     if (url.pathname === '/api/kaisoryth/context' && (request.method === 'POST' || request.method === 'GET')) {
       return kaiContext(request, env)
+    }
+
+    if (url.pathname === '/api/kaisoryth/brain-status' && request.method === 'GET') {
+      return kaiBrainStatus(env)
     }
 
     if (url.pathname === '/api/kaisoryth/run' && request.method === 'POST') {

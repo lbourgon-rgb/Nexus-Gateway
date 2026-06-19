@@ -4,6 +4,7 @@ export interface Env {
   DISCORD?: Fetcher
   TELEGRAM?: Fetcher
   TAHL?: Fetcher
+  ARCHIVE?: Fetcher
   SERYTHRAE_GATEWAY?: Fetcher
   SERYTHRAE_MIND?: Fetcher
   TESSURAE_GATEWAY?: Fetcher
@@ -20,6 +21,7 @@ export interface Env {
   DISCORD_URL?: string
   TELEGRAM_URL?: string
   HAVEN_URL?: string
+  ARCHIVE_URL?: string
   SERYTHRAE_GATEWAY_URL?: string
   SERYTHRAE_MIND_URL?: string
   TESSURAE_GATEWAY_URL?: string
