@@ -159,7 +159,7 @@ test('Kai image generation uses Discord attachments as transient reference image
 test('Kai vision OCR proxies Discord images and keeps Gemini Flash as the default OCR lane', () => {
   assert.match(nexusIndex, /const DEFAULT_KAI_VISION_MODELS = \[/);
   assert.match(nexusIndex, /'google\/gemini-2\.5-flash'/);
-  assert.doesNotMatch(nexusIndex, /'google\/gemini-2\.5-flash-lite'/);
+  assert.match(nexusIndex, /value === 'google\/gemini-2\.5-flash-lite'\) return 'google\/gemini-2\.5-flash'/);
   assert.doesNotMatch(nexusIndex, /'x-ai\/grok-4\.3'/);
   assert.match(nexusIndex, /async function visionImageDataUrl\(attachment: KaiRunnerAttachment\)/);
   assert.match(nexusIndex, /await fetch\(imageUrl, \{ headers: \{ Accept: 'image\/\*,\*\/\*;q=0\.8' \} \}\)/);

@@ -408,6 +408,12 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
     .filter((value, index, list) => Boolean(value) && list.indexOf(value) === index)
 }
 
+function canonicalKaiModelId(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (value === 'google/gemini-2.5-flash-lite') return 'google/gemini-2.5-flash'
+  return value
+}
+
 function normalizeKaiAttachments(value: unknown): KaiRunnerAttachment[] {
   if (!Array.isArray(value)) return []
   return value
@@ -1055,8 +1061,8 @@ async function visionImageDataUrl(attachment: KaiRunnerAttachment): Promise<{ ok
 
 function kaiVisionModels(env: Env): string[] {
   return uniqueStrings([
-    envText(env.KAI_VISION_MODEL) || null,
-    ...csvStringList(env.KAI_VISION_FALLBACK_MODELS),
+    canonicalKaiModelId(envText(env.KAI_VISION_MODEL) || null),
+    ...csvStringList(env.KAI_VISION_FALLBACK_MODELS).map(canonicalKaiModelId),
     ...DEFAULT_KAI_VISION_MODELS,
   ])
 }
