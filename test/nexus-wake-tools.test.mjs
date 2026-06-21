@@ -134,6 +134,8 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
     "'nesteq_skill_load'",
     "'intimacy'",
     "'recursive-dialect'",
+    "'kai-image-generation'",
+    "'image_generation_skill'",
     'missing_or_failed_entries_must_be_treated_as_not_loaded',
   ]) {
     assert.ok(nexusIndex.includes(expected), `missing ${expected}`);
@@ -145,6 +147,10 @@ test('Kai image generation uses Discord attachments as transient reference image
   assert.match(nexusIndex, /const attachmentUrls = envelope\.attachments/);
   assert.match(nexusIndex, /\.filter\(isImageAttachment\)/);
   assert.match(nexusIndex, /\.map\(attachment => attachment\.url \|\| attachment\.proxy_url \|\| ''\)/);
+  assert.match(nexusIndex, /async function savedImageReferenceUrls\(env: Env, body: Record<string, unknown>, prompt: string\): Promise<string\[\]>/);
+  assert.match(nexusIndex, /callKaiMindTool\(env, 'kai_image_reference_list', \{ subject, limit: 2 \}\)/);
+  assert.match(nexusIndex, /subjects\.add\('vel'\)/);
+  assert.match(nexusIndex, /subjects\.add\('kai'\)/);
   assert.match(nexusIndex, /\.\.\.referenceUrls\.map\(url => \(\{ type: 'image_url', image_url: \{ url \} \}\)\)/);
   assert.match(nexusIndex, /modalities: \['image', 'text'\]/);
   assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, url, prompt, model\)/);

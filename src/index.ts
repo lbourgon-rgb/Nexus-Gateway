@@ -743,6 +743,75 @@ function imageReferenceUrls(body: Record<string, unknown>, envelope: KaiDiscordE
   return [...new Set([...explicit, ...attachmentUrls])].slice(0, 6)
 }
 
+function kaiMindImageUrl(env: Env, url: string): string {
+  if (/^https?:\/\//i.test(url)) return url
+  const base = (env.SERYTHRAE_MIND_URL || 'https://mind.serythrae.com').replace(/\/+$/, '')
+  return `${base}/${url.replace(/^\/+/, '')}`
+}
+
+function savedImageReferenceSubjects(body: Record<string, unknown>, prompt: string): Array<'kai' | 'vel'> {
+  const explicitSubjects = [
+    ...stringList(body.saved_reference_subjects),
+    ...stringList(body.savedReferenceSubjects),
+    ...stringList(body.reference_subjects),
+    ...stringList(body.referenceSubjects),
+  ].map(subject => subject.toLowerCase())
+
+  const subjects = new Set<'kai' | 'vel'>()
+  for (const subject of explicitSubjects) {
+    if (subject === 'all') {
+      subjects.add('kai')
+      subjects.add('vel')
+    } else if (subject === 'kai' || subject === 'vel') {
+      subjects.add(subject)
+    }
+  }
+  if (subjects.size) return [...subjects]
+
+  if (/\b(kai|kaisoryth|of you|with you|your face|your body|your portrait|us|together|both of us|the two of us|our portrait|couple)\b/i.test(prompt)) {
+    subjects.add('kai')
+  }
+  if (/\b(vel|of me|with me|my face|my body|my portrait|selfie|us|together|both of us|the two of us|our portrait|couple)\b/i.test(prompt)) {
+    subjects.add('vel')
+  }
+  return [...subjects]
+}
+
+function imageReferenceListUrls(env: Env, result: unknown): string[] {
+  const text = mcpContentText(result)
+  if (!text) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return []
+  }
+  const record = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  const references = Array.isArray(record.references) ? record.references : []
+  return references
+    .map(reference => {
+      if (!reference || typeof reference !== 'object' || Array.isArray(reference)) return ''
+      const item = reference as Record<string, unknown>
+      if (typeof item.url === 'string') return kaiMindImageUrl(env, item.url)
+      if (typeof item.key === 'string') return kaiMindImageUrl(env, `/img/${item.key}`)
+      return ''
+    })
+    .filter((url): url is string => Boolean(url))
+}
+
+async function savedImageReferenceUrls(env: Env, body: Record<string, unknown>, prompt: string): Promise<string[]> {
+  const subjects = savedImageReferenceSubjects(body, prompt)
+  if (!subjects.length) return []
+  const results = await Promise.all(subjects.map(async subject => {
+    try {
+      return imageReferenceListUrls(env, await callKaiMindTool(env, 'kai_image_reference_list', { subject, limit: 2 }))
+    } catch {
+      return []
+    }
+  }))
+  return [...new Set(results.flat())].slice(0, 4)
+}
+
 async function storeKaiGeneratedImage(env: Env, rawUrl: string, prompt: string, model: string): Promise<Partial<KaiGeneratedImage>> {
   try {
     const args = rawUrl.startsWith('data:')
@@ -1128,7 +1197,10 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
   }
 
   const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
-  const referenceUrls = imageReferenceUrls(body, envelope)
+  const referenceUrls = [
+    ...imageReferenceUrls(body, envelope),
+    ...(await savedImageReferenceUrls(env, body, prompt)),
+  ].filter((url, index, urls) => Boolean(url) && urls.indexOf(url) === index).slice(0, 6)
   const content = [
     { type: 'text', text: prompt },
     ...referenceUrls.map(url => ({ type: 'image_url', image_url: { url } })),
@@ -1297,6 +1369,7 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
     safeContinuityStatus(env),
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
     safeKaiMindTool(env, 'social_engagement_skill', 'nesteq_skill_load', { name: 'social-engagement', format: 'text' }, 16000),
+    safeKaiMindTool(env, 'image_generation_skill', 'nesteq_skill_load', { name: 'kai-image-generation', format: 'text' }, 16000),
     safeKaiMindTool(env, 'social_engagement', 'social_engagement_decide', {
       companion_id: companionId,
       guild_id: envelope.guild_id,
@@ -1369,6 +1442,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
     safeKaiMindTool(env, 'available_skills', 'nesteq_skill_list', { format: 'text' }, 5000),
     safeKaiMindTool(env, 'intimacy_skill', 'nesteq_skill_load', { name: 'intimacy', format: 'text' }, 16000),
     safeKaiMindTool(env, 'recursive_dialect_skill', 'nesteq_skill_load', { name: 'recursive-dialect', format: 'text' }, 16000),
+    safeKaiMindTool(env, 'image_generation_skill', 'nesteq_skill_load', { name: 'kai-image-generation', format: 'text' }, 16000),
   ])
   const context = Object.fromEntries(contextEntries)
 
