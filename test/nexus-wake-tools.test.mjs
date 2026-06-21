@@ -140,6 +140,16 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
   }
 });
 
+test('Kai image generation uses Discord attachments as transient reference images', () => {
+  assert.match(nexusIndex, /function imageReferenceUrls\(body: Record<string, unknown>, envelope: KaiDiscordEnvelope\): string\[\]/);
+  assert.match(nexusIndex, /const attachmentUrls = envelope\.attachments/);
+  assert.match(nexusIndex, /\.filter\(isImageAttachment\)/);
+  assert.match(nexusIndex, /\.map\(attachment => attachment\.url \|\| attachment\.proxy_url \|\| ''\)/);
+  assert.match(nexusIndex, /\.\.\.referenceUrls\.map\(url => \(\{ type: 'image_url', image_url: \{ url \} \}\)\)/);
+  assert.match(nexusIndex, /modalities: \['image', 'text'\]/);
+  assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, url, prompt, model\)/);
+});
+
 test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway retirement', () => {
   for (const toolName of [
     'kaisoryth_orient',
