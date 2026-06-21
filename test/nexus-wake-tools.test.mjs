@@ -156,6 +156,17 @@ test('Kai image generation uses Discord attachments as transient reference image
   assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, url, prompt, model\)/);
 });
 
+test('Kai vision OCR proxies Discord images and falls back to vision-capable models', () => {
+  assert.match(nexusIndex, /const DEFAULT_KAI_VISION_MODELS = \[/);
+  assert.match(nexusIndex, /'google\/gemini-2\.5-flash-lite'/);
+  assert.match(nexusIndex, /'x-ai\/grok-4\.3'/);
+  assert.match(nexusIndex, /async function visionImageDataUrl\(attachment: KaiRunnerAttachment\)/);
+  assert.match(nexusIndex, /await fetch\(imageUrl, \{ headers: \{ Accept: 'image\/\*,\*\/\*;q=0\.8' \} \}\)/);
+  assert.match(nexusIndex, /data:\$\{contentType\};base64,\$\{arrayBufferToBase64\(buffer\)\}/);
+  assert.match(nexusIndex, /for \(const candidate of models\)/);
+  assert.match(nexusIndex, /callOpenRouterVision\(\s*env,\s*candidate,\s*imageData\.dataUrl,/);
+});
+
 test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway retirement', () => {
   for (const toolName of [
     'kaisoryth_orient',

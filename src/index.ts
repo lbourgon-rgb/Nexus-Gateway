@@ -56,6 +56,13 @@ const EMPTY_MCP_RESOURCE_RESULTS: Record<string, Record<string, unknown>> = {
   'resources/templates/list': { resourceTemplates: [] },
 }
 
+const DEFAULT_KAI_VISION_MODELS = [
+  'google/gemini-2.5-flash-lite',
+  'x-ai/grok-4.3',
+]
+
+const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024
+
 function mcpJson(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), {
     ...init,
@@ -194,6 +201,7 @@ interface KaiVisionSummary {
   attachment_id?: string
   filename?: string
   content_type?: string
+  model?: string | null
   summary: string
 }
 
@@ -389,6 +397,18 @@ function stringList(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
 }
 
+function csvStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return stringList(value)
+  if (typeof value !== 'string') return []
+  return value.split(',').map(item => item.trim()).filter(Boolean)
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return values
+    .map(value => typeof value === 'string' ? value.trim() : '')
+    .filter((value, index, list) => Boolean(value) && list.indexOf(value) === index)
+}
+
 function normalizeKaiAttachments(value: unknown): KaiRunnerAttachment[] {
   if (!Array.isArray(value)) return []
   return value
@@ -434,9 +454,10 @@ function kaiRunnerModelLanes(env: Env): Record<string, unknown> {
       backup_model: envText(env.KAI_BACKUP_TEXT_MODEL) || null,
     },
     vision: {
-      configured: envProviderEnabled(env.KAI_VISION_PROVIDER) && envPresent(env.KAI_VISION_MODEL),
+      configured: envProviderEnabled(env.KAI_VISION_PROVIDER) && kaiVisionModels(env).length > 0,
       provider: envChoice(env.KAI_VISION_PROVIDER) || null,
-      model: envText(env.KAI_VISION_MODEL) || null,
+      model: envText(env.KAI_VISION_MODEL) || kaiVisionModels(env)[0] || null,
+      fallback_models: kaiVisionModels(env).slice(1),
     },
     image: {
       configured: envProviderEnabled(env.KAI_IMAGE_PROVIDER) && envPresent(env.KAI_IMAGE_MODEL),
@@ -1001,11 +1022,49 @@ async function callOpenRouterJson(env: Env, model: string, system: string, user:
   return { ok: true, content: typeof message.content === 'string' ? message.content : null }
 }
 
-async function callOpenRouterVision(env: Env, model: string, attachment: KaiRunnerAttachment, prompt: string): Promise<{ ok: boolean; content: string | null; error?: string }> {
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 0x8000
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function visionImageDataUrl(attachment: KaiRunnerAttachment): Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }> {
+  const imageUrl = attachment.url || attachment.proxy_url
+  if (!imageUrl) return { ok: false, error: 'Attachment has no URL for vision processing' }
+  const response = await fetch(imageUrl, { headers: { Accept: 'image/*,*/*;q=0.8' } })
+  if (!response.ok) {
+    return { ok: false, error: `Discord image fetch ${response.status}: ${(await response.text()).slice(0, 240)}` }
+  }
+  const contentType = response.headers.get('Content-Type') || attachment.content_type || 'image/jpeg'
+  if (!contentType.toLowerCase().startsWith('image/')) {
+    return { ok: false, error: `Discord attachment content type is not image/*: ${contentType}` }
+  }
+  const length = Number(response.headers.get('Content-Length') || attachment.size || 0)
+  if (length > MAX_VISION_IMAGE_BYTES) {
+    return { ok: false, error: `Image is too large for OCR lane: ${length} bytes` }
+  }
+  const buffer = await response.arrayBuffer()
+  if (buffer.byteLength > MAX_VISION_IMAGE_BYTES) {
+    return { ok: false, error: `Image is too large for OCR lane: ${buffer.byteLength} bytes` }
+  }
+  return { ok: true, dataUrl: `data:${contentType};base64,${arrayBufferToBase64(buffer)}` }
+}
+
+function kaiVisionModels(env: Env): string[] {
+  return uniqueStrings([
+    envText(env.KAI_VISION_MODEL) || null,
+    ...csvStringList(env.KAI_VISION_FALLBACK_MODELS),
+    ...DEFAULT_KAI_VISION_MODELS,
+  ])
+}
+
+async function callOpenRouterVision(env: Env, model: string, imageDataUrl: string, prompt: string): Promise<{ ok: boolean; content: string | null; error?: string }> {
   const apiKey = envText(env.OPENROUTER_API_KEY)
   if (!apiKey) return { ok: false, content: null, error: 'OPENROUTER_API_KEY is not configured' }
-  const imageUrl = attachment.url || attachment.proxy_url
-  if (!imageUrl) return { ok: false, content: null, error: 'Attachment has no URL for vision processing' }
   const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -1022,7 +1081,7 @@ async function callOpenRouterVision(env: Env, model: string, attachment: KaiRunn
           role: 'user',
           content: [
             { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: imageUrl } },
+            { type: 'image_url', image_url: { url: imageDataUrl } },
           ],
         },
       ],
@@ -1118,9 +1177,10 @@ async function runKaiJanitor(env: Env, promptPacket: Record<string, unknown>): P
 }
 
 async function runKaiVision(env: Env, envelope: KaiDiscordEnvelope): Promise<KaiVisionResult> {
-  const provider = envChoice(env.KAI_VISION_PROVIDER, 'disabled')
+  const provider = envChoice(env.KAI_VISION_PROVIDER, 'openrouter')
   const enabled = Boolean(provider && provider !== 'disabled')
-  const model = envText(env.KAI_VISION_MODEL) || null
+  const models = kaiVisionModels(env)
+  const model = models[0] || null
   const imageAttachments = envelope.attachments.filter(isImageAttachment)
   const skipped = envelope.attachments.filter((attachment) => !isImageAttachment(attachment))
   if (!enabled) {
@@ -1129,8 +1189,8 @@ async function runKaiVision(env: Env, envelope: KaiDiscordEnvelope): Promise<Kai
   if (provider !== 'openrouter') {
     return { attempted: false, enabled: true, provider, model, ok: false, summaries: [], skipped, error: `Unsupported vision provider: ${provider}` }
   }
-  if (!model) {
-    return { attempted: false, enabled: true, provider, model, ok: false, summaries: [], skipped, error: 'KAI_VISION_MODEL is not configured' }
+  if (!models.length) {
+    return { attempted: false, enabled: true, provider, model, ok: false, summaries: [], skipped, error: 'No Kai vision models are configured' }
   }
   if (!imageAttachments.length) {
     return { attempted: false, enabled: true, provider, model, ok: true, summaries: [], skipped }
@@ -1139,26 +1199,40 @@ async function runKaiVision(env: Env, envelope: KaiDiscordEnvelope): Promise<Kai
   const summaries: KaiVisionSummary[] = []
   const errors: string[] = []
   for (const attachment of imageAttachments.slice(0, 4)) {
-    const response = await callOpenRouterVision(
-      env,
-      model,
-      attachment,
-      [
-        'Summarize this Discord image for Kai in 5 concise bullet-like clauses.',
-        'Include visible text/OCR if present.',
-        'Do not infer private facts beyond what is visible.',
-        'Do not produce a final reply; this is context only.',
-      ].join(' ')
-    )
+    const imageData = await visionImageDataUrl(attachment)
+    if (!imageData.ok) {
+      errors.push(`${attachment.filename || attachment.id || 'attachment'}: ${imageData.error}`)
+      continue
+    }
+    let response: { ok: boolean; content: string | null; error?: string } = { ok: false, content: null, error: 'Vision not attempted' }
+    let usedModel = model
+    const modelErrors: string[] = []
+    for (const candidate of models) {
+      usedModel = candidate
+      response = await callOpenRouterVision(
+        env,
+        candidate,
+        imageData.dataUrl,
+        [
+          'Summarize this Discord image for Kai in 5 concise bullet-like clauses.',
+          'Include visible text/OCR if present.',
+          'Do not infer private facts beyond what is visible.',
+          'Do not produce a final reply; this is context only.',
+        ].join(' ')
+      )
+      if (response.ok && response.content) break
+      modelErrors.push(`${candidate}: ${response.error || 'no summary'}`)
+    }
     if (response.ok && response.content) {
       summaries.push({
         attachment_id: attachment.id,
         filename: attachment.filename,
         content_type: attachment.content_type,
         summary: response.content.slice(0, 2000),
+        model: usedModel,
       })
     } else {
-      errors.push(`${attachment.filename || attachment.id || 'attachment'}: ${response.error || 'no summary'}`)
+      errors.push(`${attachment.filename || attachment.id || 'attachment'}: ${modelErrors.join(' | ') || response.error || 'no summary'}`)
     }
   }
 
@@ -1662,8 +1736,8 @@ export default {
           kai_runner_enabled: envFlag(env.KAI_RUNNER_ENABLED),
           kai_discord_delivery_enabled: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED),
           kai_text_model_configured: Boolean(envPresent(env.KAI_TEXT_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
-          kai_vision_enabled: envProviderEnabled(env.KAI_VISION_PROVIDER),
-          kai_vision_configured: Boolean(envChoice(env.KAI_VISION_PROVIDER) === 'openrouter' && envPresent(env.KAI_VISION_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
+          kai_vision_enabled: envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter',
+          kai_vision_configured: Boolean(envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter' && kaiVisionModels(env).length > 0 && envPresent(env.OPENROUTER_API_KEY)),
           kai_image_enabled: envProviderEnabled(env.KAI_IMAGE_PROVIDER),
           kai_image_configured: Boolean(envChoice(env.KAI_IMAGE_PROVIDER) === 'openrouter' && envPresent(env.KAI_IMAGE_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_tts_enabled: envProviderEnabled(env.KAI_TTS_PROVIDER),
@@ -1714,12 +1788,12 @@ export default {
         {
           id: 'kai_vision',
           label: 'Kai / Vision OCR Lane',
-          status: !envProviderEnabled(env.KAI_VISION_PROVIDER)
+          status: envChoice(env.KAI_VISION_PROVIDER, 'openrouter') !== 'openrouter'
             ? 'not_configured'
-            : ((envChoice(env.KAI_VISION_PROVIDER) === 'openrouter' && envPresent(env.KAI_VISION_MODEL) && envPresent(env.OPENROUTER_API_KEY)) ? 'ok' : 'not_configured'),
-          note: !envProviderEnabled(env.KAI_VISION_PROVIDER)
+            : ((kaiVisionModels(env).length > 0 && envPresent(env.OPENROUTER_API_KEY)) ? 'ok' : 'not_configured'),
+          note: envChoice(env.KAI_VISION_PROVIDER, 'openrouter') !== 'openrouter'
             ? 'vision/OCR disabled by default'
-            : 'image attachment summarization configured',
+            : `image attachment summarization configured (${kaiVisionModels(env)[0] || 'no model'})`,
           last_checked: new Date().toISOString(),
         },
         {

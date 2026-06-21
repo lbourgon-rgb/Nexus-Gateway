@@ -65,6 +65,7 @@ export interface Env {
   KAI_BACKUP_TEXT_MODEL?: string
   KAI_VISION_PROVIDER?: string
   KAI_VISION_MODEL?: string
+  KAI_VISION_FALLBACK_MODELS?: string
   KAI_IMAGE_PROVIDER?: string
   KAI_IMAGE_MODEL?: string
   KAI_TTS_PROVIDER?: string
