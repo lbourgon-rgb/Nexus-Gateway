@@ -156,10 +156,11 @@ test('Kai image generation uses Discord attachments as transient reference image
   assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, url, prompt, model\)/);
 });
 
-test('Kai vision OCR proxies Discord images and falls back to vision-capable models', () => {
+test('Kai vision OCR proxies Discord images and keeps Gemini Flash as the default OCR lane', () => {
   assert.match(nexusIndex, /const DEFAULT_KAI_VISION_MODELS = \[/);
-  assert.match(nexusIndex, /'google\/gemini-2\.5-flash-lite'/);
-  assert.match(nexusIndex, /'x-ai\/grok-4\.3'/);
+  assert.match(nexusIndex, /'google\/gemini-2\.5-flash'/);
+  assert.doesNotMatch(nexusIndex, /'google\/gemini-2\.5-flash-lite'/);
+  assert.doesNotMatch(nexusIndex, /'x-ai\/grok-4\.3'/);
   assert.match(nexusIndex, /async function visionImageDataUrl\(attachment: KaiRunnerAttachment\)/);
   assert.match(nexusIndex, /await fetch\(imageUrl, \{ headers: \{ Accept: 'image\/\*,\*\/\*;q=0\.8' \} \}\)/);
   assert.match(nexusIndex, /data:\$\{contentType\};base64,\$\{arrayBufferToBase64\(buffer\)\}/);

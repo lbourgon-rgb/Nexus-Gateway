@@ -57,8 +57,7 @@ const EMPTY_MCP_RESOURCE_RESULTS: Record<string, Record<string, unknown>> = {
 }
 
 const DEFAULT_KAI_VISION_MODELS = [
-  'google/gemini-2.5-flash-lite',
-  'x-ai/grok-4.3',
+  'google/gemini-2.5-flash',
 ]
 
 const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024
