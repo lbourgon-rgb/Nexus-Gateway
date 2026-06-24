@@ -2053,15 +2053,25 @@ async function kaiReadingStatus(env: Env): Promise<Response> {
   const bookId = stringValue(primary?.id) || stringValue(primary?.book_id) || null
   let progress: unknown = null
   let annotations: unknown = []
+  let velProgress: unknown = null
+  let velAnnotations: unknown = []
   if (bookId) {
     const args = { book_id: bookId, companion }
-    const [progressResult, annotationResult] = await Promise.all([
+    const velArgs = { book_id: bookId, companion: 'vel' }
+    const [progressResult, annotationResult, velProgressResult, velAnnotationResult] = await Promise.all([
       callCatalougeTool(env, 'catalouge_get_progress', args).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
       callCatalougeTool(env, 'catalouge_get_annotations', args).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+      callCatalougeTool(env, 'catalouge_get_progress', velArgs).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+      callCatalougeTool(env, 'catalouge_get_annotations', velArgs).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
     ])
     progress = mcpJsonValue(progressResult)
     annotations = mcpJsonValue(annotationResult)
+    velProgress = mcpJsonValue(velProgressResult)
+    velAnnotations = mcpJsonValue(velAnnotationResult)
   }
+
+  const kaiAnnotationRows = listRecords(annotations)
+  const velAnnotationRows = listRecords(velAnnotations)
 
   return new Response(JSON.stringify({
     ok: true,
@@ -2073,9 +2083,24 @@ async function kaiReadingStatus(env: Env): Promise<Response> {
     primary_book: primary,
     progress,
     annotations,
+    tracks: {
+      kai: {
+        companion_id: companion,
+        progress,
+        annotations,
+        counts: { annotations: kaiAnnotationRows.length },
+      },
+      vel: {
+        companion_id: 'vel',
+        progress: velProgress,
+        annotations: velAnnotations,
+        counts: { annotations: velAnnotationRows.length },
+      },
+    },
     counts: {
       reading_books: books.length,
-      annotations: listRecords(annotations).length,
+      annotations: kaiAnnotationRows.length,
+      vel_annotations: velAnnotationRows.length,
     },
   }, null, 2), {
     headers: { 'Content-Type': 'application/json', ...CORS },
