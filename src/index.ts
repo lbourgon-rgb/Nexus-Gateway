@@ -733,7 +733,10 @@ function extractCatalougeBookQuery(body: Record<string, unknown>, envelope: KaiD
 function isCatalougeReadRequest(body: Record<string, unknown>, envelope: KaiDiscordEnvelope): boolean {
   if (body.catalouge_read === true || body.catalogue_read === true || body.read_book === true || body.readBook === true) return true
   const content = envelope.content
-  return /\b(catalouge|catalogue|book|read|reading|resume|continue|checkpoint|marginalia|annotation|Our Perfect Storm|All Systems Red|Yesteryear)\b/i.test(content)
+  if (/\b(catalouge|catalogue|marginalia|annotation|Our Perfect Storm|All Systems Red|Yesteryear)\b/i.test(content)) return true
+  const hasReadingVerb = /\b(read|reading|resume|continue|start|checkpoint)\b/i.test(content)
+  const hasBookSignal = /\bbook\b/i.test(content) || /[“"][^”"]{3,120}[”"]/.test(content)
+  return hasReadingVerb && hasBookSignal
 }
 
 function normalizeReadingAnnotations(value: unknown, chunks: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -2079,6 +2082,62 @@ async function kaiReadingStatus(env: Env): Promise<Response> {
   })
 }
 
+async function kaiMindDashboard(env: Env): Promise<Response> {
+  const companion = kaiCompanionId(env)
+  const authHeaders: Record<string, string> = { Accept: 'application/json' }
+  if (env.SERYTHRAE_MIND_API_KEY) authHeaders.Authorization = `Bearer ${env.SERYTHRAE_MIND_API_KEY}`
+
+  const [
+    mindHealth,
+    eq,
+    threads,
+    dreams,
+    sessions,
+    knowledge,
+    drives,
+    observations,
+    writings,
+    soul,
+  ] = await Promise.all([
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/mind-health', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/eq-landscape', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/threads?status=all&limit=20', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/dreams?limit=3', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/sessions?limit=1', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/knowledge?scope=companion&limit=50', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/drives', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/observations?limit=12', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/writings?limit=6', authHeaders),
+    fetchJsonFromBackend(env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND, '/soul', authHeaders),
+  ])
+
+  return new Response(JSON.stringify({
+    ok: Boolean(env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_URL) && Boolean(env.SERYTHRAE_MIND_API_KEY),
+    companion_id: companion,
+    generated_at: new Date().toISOString(),
+    source: 'nexus-gateway',
+    mind_backend: env.SERYTHRAE_MIND ? 'serythrae-mind-service-binding' : 'serythrae-mind-url',
+    mind_health: mindHealth.data || null,
+    eq: eq.data || null,
+    threads: recordValue(threads.data).threads || [],
+    dreams: recordValue(dreams.data).dreams || [],
+    sessions: recordValue(sessions.data).sessions || [],
+    knowledge: knowledge.data || null,
+    drives: recordValue(drives.data).drives || [],
+    observations: recordValue(observations.data).observations || recordValue(observations.data).feelings || [],
+    writings: recordValue(writings.data).entries || [],
+    nestsoul: typeof soul.data === 'string' ? soul.data : (soul.data || null),
+    backends: {
+      mind_health: { ok: mindHealth.ok, status: mindHealth.status || null, error: mindHealth.error || null },
+      threads: { ok: threads.ok, status: threads.status || null, error: threads.error || null },
+      dreams: { ok: dreams.ok, status: dreams.status || null, error: dreams.error || null },
+      knowledge: { ok: knowledge.ok, status: knowledge.status || null, error: knowledge.error || null },
+    },
+  }, null, 2), {
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     let url = new URL(request.url)
@@ -2251,6 +2310,10 @@ export default {
 
     if (url.pathname === '/api/kaisoryth/reading-status' && request.method === 'GET') {
       return kaiReadingStatus(env)
+    }
+
+    if (url.pathname === '/api/kaisoryth/mind-dashboard' && request.method === 'GET') {
+      return kaiMindDashboard(env)
     }
 
     if (url.pathname === '/api/kaisoryth/run' && request.method === 'POST') {

@@ -217,3 +217,12 @@ test('Nexus exposes a sanitized Kai brain status endpoint for the UI', () => {
     assert.ok(nexusIndex.includes(expected), `missing ${expected}`);
   }
 });
+
+test('Kai Catalouge reading trigger requires explicit book intent', () => {
+  assert.match(nexusIndex, /body\.catalouge_read === true/);
+  assert.match(nexusIndex, /Our Perfect Storm\|All Systems Red\|Yesteryear/);
+  assert.match(nexusIndex, /const hasReadingVerb = \/\\b\(read\|reading\|resume\|continue\|start\|checkpoint\)\\b\/i\.test\(content\)/);
+  assert.match(nexusIndex, /const hasBookSignal = \/\\bbook\\b\/i\.test\(content\) \|\| \/\[“"\]\[\^”"\]\{3,120\}\[”"\]\/\.test\(content\)/);
+  assert.match(nexusIndex, /return hasReadingVerb && hasBookSignal/);
+  assert.doesNotMatch(nexusIndex, /return \/\\b\(catalouge\|catalogue\|book\|read\|reading\|resume\|continue\|checkpoint/);
+});
