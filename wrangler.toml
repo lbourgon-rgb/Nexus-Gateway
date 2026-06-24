@@ -35,6 +35,10 @@ binding = "ARCHIVE"
 service = "archive-worker"
 
 [[services]]
+binding = "CATALOUGE"
+service = "catalouge-api"
+
+[[services]]
 binding = "SERYTHRAE_GATEWAY"
 service = "serythrae-gw"
 environment = "production"
@@ -108,7 +112,7 @@ VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
 # - SERYTHRAE_MIND_API_KEY authorizes direct Kai/NESTeq mind calls.
 # - VELASTRAHQ_GATEWAY_API_KEY authorizes VelastraHQ Gateway MCP calls.
 # - VELASTRAHQ_EQ_API_KEY authorizes direct Mor'zar/VelastraHQ EQ MCP calls.
-# - CATALOUGE_TOKEN authorizes private Catalouge calls, if CATALOUGE_URL is set.
+# - CATALOUGE_TOKEN authorizes private Catalouge calls through the CATALOUGE service binding or optional CATALOUGE_URL fallback.
 # - OPENROUTER_API_KEY authorizes Kai runner text/vision/image model calls.
 # - ELEVENLABS_API_KEY authorizes Kai runner TTS when KAI_TTS_PROVIDER=elevenlabs.
 # - KAI_JANITOR_URL points to an optional local/Ollama janitor endpoint when KAI_JANITOR_PROVIDER=ollama.

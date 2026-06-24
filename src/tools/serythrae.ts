@@ -188,6 +188,15 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
     return serythraeMcp(env, 'nesteq_threads_active', body)
   })
 
+  server.tool('kaisoryth_nestsoul_read', 'Read Kai NESTSoul bedrock and latest living document versions.', {
+    companion_id: z.string().optional().default(KAI_ONLY),
+    include_versions: z.boolean().optional().default(true),
+  }, async (args) => {
+    requireKai(args.companion_id)
+    const { companion_id, ...body } = args
+    return serythraeMcp(env, 'nestsoul_read', body)
+  })
+
   server.tool('kaisoryth_home_read', 'Read current Kai/Vel NESTeq home state.', {
     companion_id: z.string().optional().default(KAI_ONLY),
   }, async (args) => {

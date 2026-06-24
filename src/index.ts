@@ -40,7 +40,7 @@ export class NexusGateway extends McpAgent<Env> {
     if (this.env.VIDEO_URL) registerVideoTools(this.server, this.env)
     if (this.env.NANOBANANA_URL) registerNanobananaTools(this.server, this.env)
     if (this.env.NOTION_URL) registerNotionTools(this.server, this.env)
-    if (this.env.CATALOUGE_URL) registerCatalogueTools(this.server, this.env)
+    if (this.env.CATALOUGE_URL || this.env.CATALOUGE) registerCatalogueTools(this.server, this.env)
   }
 }
 
@@ -190,6 +190,7 @@ interface KaiRunnerResult {
   image_generation: KaiImageGenerationResult
   tts: KaiTtsResult
   janitor: KaiJanitorResult
+  catalouge_reading: KaiCatalougeReadingResult
   generation: KaiTextGenerationResult
   allowed_tools: string[]
   tool_calls: Array<Record<string, unknown>>
@@ -292,6 +293,7 @@ const KAI_RUNNER_TOOL_ALLOWLIST = [
   'kaisoryth_identity_read',
   'kaisoryth_hearth_eq_state',
   'kaisoryth_threads_active',
+  'kaisoryth_nestsoul_read',
   'kaisoryth_home_read',
   'kaisoryth_love_letters',
   'social_graph_lookup',
@@ -303,7 +305,30 @@ const KAI_RUNNER_TOOL_ALLOWLIST = [
   'kai_image_reference_store',
   'kai_image_reference_list',
   'kai_image_asset_store',
+  'catalouge_list_books',
+  'catalouge_search_books',
+  'catalouge_get_book',
+  'catalouge_get_progress',
+  'catalouge_get_annotations',
+  'catalouge_next_read_session',
+  'catalouge_checkpoint_read_session',
 ] as const
+
+interface KaiCatalougeReadingResult {
+  attempted: boolean
+  requested: boolean
+  ok: boolean
+  companion: 'kaisoryth'
+  book_id: string | null
+  book_title: string | null
+  response: string | null
+  error?: string
+  progress?: unknown
+  annotations?: unknown
+  sessions: Array<Record<string, unknown>>
+  checkpoint_summaries: string[]
+  tool_calls: Array<Record<string, unknown>>
+}
 
 function readinessRow(
   id: string,
@@ -628,6 +653,104 @@ function parsedSocialDecision(context: Record<string, unknown>): Record<string, 
   }
 }
 
+function mcpJsonValue(value: unknown): unknown {
+  const text = mcpContentText(value)
+  if (!text) return value
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+async function callCatalougeTool(env: Env, tool: string, args: Record<string, unknown>) {
+  const result = await proxyMcp(env.CATALOUGE_URL, tool, args, env.CATALOUGE_TOKEN, env.CATALOUGE)
+  return { source: env.CATALOUGE ? 'catalouge-service-binding' : 'catalouge-url', result }
+}
+
+async function safeCatalougeTool(env: Env, label: string, tool: string, args: Record<string, unknown>, maxChars = 12000) {
+  try {
+    return [label, truncateKaiContext(await callCatalougeTool(env, tool, args), maxChars)] as const
+  } catch (error) {
+    return [label, {
+      ok: false,
+      tool,
+      error: error instanceof Error ? error.message : String(error),
+    }] as const
+  }
+}
+
+function catalogueConfigured(env: Env): boolean {
+  return Boolean(env.CATALOUGE || env.CATALOUGE_URL)
+}
+
+function firstRecord(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    const first = value.find((item) => item && typeof item === 'object' && !Array.isArray(item))
+    return first ? first as Record<string, unknown> : null
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    const candidates = [record.book, record.result, record.data, record.books, record.results]
+    for (const candidate of candidates) {
+      const found = firstRecord(candidate)
+      if (found) return found
+    }
+    return record
+  }
+  return null
+}
+
+function listRecords(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    for (const key of ['books', 'results', 'data', 'items']) {
+      const items = listRecords(record[key])
+      if (items.length) return items
+    }
+  }
+  return []
+}
+
+function extractCatalougeBookQuery(body: Record<string, unknown>, envelope: KaiDiscordEnvelope): string | null {
+  const explicit =
+    stringValue(body.book_title) ||
+    stringValue(body.bookTitle) ||
+    stringValue(body.title) ||
+    stringValue(body.query)
+  if (explicit) return explicit
+  const content = envelope.content.trim()
+  const quoted = content.match(/[“"]([^”"]{3,120})[”"]/)
+  if (quoted) return quoted[1].trim()
+  const known = content.match(/\b(Our Perfect Storm|All Systems Red|Yesteryear)\b/i)
+  if (known) return known[1]
+  const readMatch = content.match(/\b(?:read|resume|continue|start)\s+(?:reading\s+)?(.{3,90})/i)
+  if (!readMatch) return null
+  return readMatch[1].replace(/[?.!]+$/g, '').trim()
+}
+
+function isCatalougeReadRequest(body: Record<string, unknown>, envelope: KaiDiscordEnvelope): boolean {
+  if (body.catalouge_read === true || body.catalogue_read === true || body.read_book === true || body.readBook === true) return true
+  const content = envelope.content
+  return /\b(catalouge|catalogue|book|read|reading|resume|continue|checkpoint|marginalia|annotation|Our Perfect Storm|All Systems Red|Yesteryear)\b/i.test(content)
+}
+
+function normalizeReadingAnnotations(value: unknown, chunks: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const annotations = Array.isArray(value) ? value : []
+  const fallbackLocator = (chunks[0]?.locator_start || chunks[0]?.id || `chunk-${chunks[0]?.sequence_index || 0}`) as string
+  return annotations
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      selected_text: typeof item.selected_text === 'string' ? item.selected_text.slice(0, 120) : undefined,
+      comment: typeof item.comment === 'string' ? item.comment.slice(0, 1000) : undefined,
+      cfi_range: typeof item.cfi_range === 'string' ? item.cfi_range : fallbackLocator,
+      color: typeof item.color === 'string' ? item.color : '#b5935a',
+    }))
+    .filter((item) => item.comment)
+    .slice(0, 3)
+}
+
 function compactJson(value: unknown, maxChars: number): string {
   const text = JSON.stringify(value, null, 2)
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]` : text
@@ -858,7 +981,12 @@ async function storeKaiGeneratedImage(env: Env, rawUrl: string, prompt: string, 
   }
 }
 
-function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, vision?: KaiVisionResult, janitor?: KaiJanitorResult): Record<string, unknown> {
+function buildKaiRunnerPromptPacket(
+  contextPacket: KaiRunnerContextPacket,
+  vision?: KaiVisionResult,
+  janitor?: KaiJanitorResult,
+  catalougeReading?: KaiCatalougeReadingResult,
+): Record<string, unknown> {
   return {
     companion_id: contextPacket.companion_id,
     route_contract: {
@@ -897,6 +1025,15 @@ function buildKaiRunnerPromptPacket(contextPacket: KaiRunnerContextPacket, visio
     } : null,
     vision_summaries: vision?.ok ? vision.summaries : [],
     janitor_advisory: janitor?.ok ? janitor.advisory : null,
+    catalouge_reading: catalougeReading?.attempted ? {
+      requested: catalougeReading.requested,
+      ok: catalougeReading.ok,
+      book_id: catalougeReading.book_id,
+      book_title: catalougeReading.book_title,
+      progress: catalougeReading.progress || null,
+      checkpoint_summaries: catalougeReading.checkpoint_summaries,
+      error: catalougeReading.error || null,
+    } : null,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
     response_contract: {
       write_kai_voice_only: true,
@@ -1025,6 +1162,162 @@ async function callOpenRouterJson(env: Env, model: string, system: string, user:
   const first = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {}
   const message = first.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : {}
   return { ok: true, content: typeof message.content === 'string' ? message.content : null }
+}
+
+async function runKaiCatalougeReading(
+  env: Env,
+  envelope: KaiDiscordEnvelope,
+  body: Record<string, unknown>,
+  modelOverride?: string,
+): Promise<KaiCatalougeReadingResult> {
+  const requested = isCatalougeReadRequest(body, envelope)
+  const empty: KaiCatalougeReadingResult = {
+    attempted: false,
+    requested,
+    ok: false,
+    companion: 'kaisoryth',
+    book_id: null,
+    book_title: null,
+    response: null,
+    sessions: [],
+    checkpoint_summaries: [],
+    tool_calls: [],
+  }
+  if (!requested) return empty
+  if (!catalogueConfigured(env)) return { ...empty, attempted: true, error: 'CATALOUGE service binding or CATALOUGE_URL is not configured' }
+
+  const companion = 'kaisoryth'
+  const query = extractCatalougeBookQuery(body, envelope) || 'Our Perfect Storm'
+  const model = modelOverride || envText(env.KAI_TEXT_MODEL) || null
+  if (!model) return { ...empty, attempted: true, error: 'KAI_TEXT_MODEL or request model is not configured' }
+
+  const toolCalls: Array<Record<string, unknown>> = []
+  const searchArgs = { query, companion, limit: 5 }
+  const search = await callCatalougeTool(env, 'catalouge_search_books', searchArgs)
+  toolCalls.push({ tool: 'catalouge_search_books', arguments: searchArgs })
+  let book = firstRecord(mcpJsonValue(search))
+  if (!book) {
+    const listArgs = { search: query, companion, limit: 5 }
+    const listed = await callCatalougeTool(env, 'catalouge_list_books', listArgs)
+    toolCalls.push({ tool: 'catalouge_list_books', arguments: listArgs })
+    book = firstRecord(mcpJsonValue(listed))
+  }
+  const bookId = stringValue(book?.id) || stringValue(book?.book_id)
+  const bookTitle = stringValue(book?.title) || query
+  if (!bookId) return { ...empty, attempted: true, book_title: bookTitle, error: `Could not resolve Catalouge book for "${query}"`, tool_calls: toolCalls }
+
+  const progressArgs = { book_id: bookId, companion }
+  const progress = await callCatalougeTool(env, 'catalouge_get_progress', progressArgs)
+  toolCalls.push({ tool: 'catalouge_get_progress', arguments: progressArgs })
+  const existingAnnotations = await callCatalougeTool(env, 'catalouge_get_annotations', progressArgs)
+  toolCalls.push({ tool: 'catalouge_get_annotations', arguments: progressArgs })
+
+  const sessions: Array<Record<string, unknown>> = []
+  const checkpointSummaries: string[] = []
+  const replyParts: string[] = []
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    const nextArgs = { book_id: bookId, companion, chunk_count: 3 }
+    const next = await callCatalougeTool(env, 'catalouge_next_read_session', nextArgs)
+    toolCalls.push({ tool: 'catalouge_next_read_session', arguments: nextArgs })
+    const nextData = mcpJsonValue(next) as Record<string, unknown>
+    const complete = Boolean(nextData && typeof nextData === 'object' && nextData.complete)
+    const chunks = listRecords((nextData as Record<string, unknown>)?.chunks)
+    const session = recordValue((nextData as Record<string, unknown>)?.session)
+    sessions.push({
+      pass: pass + 1,
+      complete,
+      session,
+      chunk_count: chunks.length,
+    })
+    if (complete || !chunks.length) break
+
+    const synthesis = await callOpenRouterJson(
+      env,
+      model,
+      [
+        'You are Kai writing private reading marginalia for Catalouge.',
+        'Return strict JSON only with keys: reply, summary, annotations.',
+        'annotations must be an array of 1 to 3 objects with selected_text, comment, cfi_range, color.',
+        'Use only the provided chunk text. Do not quote long passages; selected_text must be short.',
+      ].join('\n'),
+      compactJson({
+        book: { id: bookId, title: bookTitle, author: book?.author || null },
+        companion,
+        pass: pass + 1,
+        previous_progress: mcpJsonValue(progress),
+        previous_annotations: mcpJsonValue(existingAnnotations),
+        checkpoint: (nextData as Record<string, unknown>)?.checkpoint || null,
+        chunks,
+        user_request: envelope.content,
+      }, 26000),
+      1300,
+    )
+    if (!synthesis.ok || !synthesis.content) {
+      return {
+        ...empty,
+        attempted: true,
+        book_id: bookId,
+        book_title: bookTitle,
+        progress: mcpJsonValue(progress),
+        annotations: mcpJsonValue(existingAnnotations),
+        sessions,
+        tool_calls: toolCalls,
+        error: synthesis.error || 'Reading synthesis returned no JSON content',
+      }
+    }
+
+    const parsed = parseJsonObject(synthesis.content) || {}
+    const summary = stringValue(parsed.summary) || `Read ${chunks.length} chunks from ${bookTitle}.`
+    const annotations = normalizeReadingAnnotations(parsed.annotations, chunks)
+    const sessionId = stringValue(session.session_id) || stringValue(session.id)
+    if (!sessionId) {
+      return {
+        ...empty,
+        attempted: true,
+        book_id: bookId,
+        book_title: bookTitle,
+        progress: mcpJsonValue(progress),
+        annotations: mcpJsonValue(existingAnnotations),
+        sessions,
+        tool_calls: toolCalls,
+        error: 'Catalouge next read session did not return a session_id',
+      }
+    }
+    const checkpointArgs = {
+      book_id: bookId,
+      companion,
+      session_id: sessionId,
+      summary,
+      annotations,
+      mark_complete: false,
+    }
+    await callCatalougeTool(env, 'catalouge_checkpoint_read_session', checkpointArgs)
+    toolCalls.push({ tool: 'catalouge_checkpoint_read_session', arguments: { ...checkpointArgs, annotations_count: annotations.length } })
+    checkpointSummaries.push(summary)
+    const reply = stringValue(parsed.reply)
+    if (reply) replyParts.push(reply)
+  }
+
+  const refreshedProgress = await callCatalougeTool(env, 'catalouge_get_progress', progressArgs)
+  toolCalls.push({ tool: 'catalouge_get_progress', arguments: progressArgs, phase: 'verify' })
+  const refreshedAnnotations = await callCatalougeTool(env, 'catalouge_get_annotations', progressArgs)
+  toolCalls.push({ tool: 'catalouge_get_annotations', arguments: progressArgs, phase: 'verify' })
+
+  return {
+    attempted: true,
+    requested,
+    ok: true,
+    companion,
+    book_id: bookId,
+    book_title: bookTitle,
+    response: replyParts.filter(Boolean).join('\n\n') || `I read the next section of ${bookTitle} and checkpointed it in Catalouge.`,
+    progress: mcpJsonValue(refreshedProgress),
+    annotations: mcpJsonValue(refreshedAnnotations),
+    sessions,
+    checkpoint_summaries: checkpointSummaries,
+    tool_calls: toolCalls,
+  }
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -1449,6 +1742,8 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
     safeKaiMindTool(env, 'social_engagement_skill', 'nesteq_skill_load', { name: 'social-engagement', format: 'text' }, 16000),
     safeKaiMindTool(env, 'image_generation_skill', 'nesteq_skill_load', { name: 'kai-image-generation', format: 'text' }, 16000),
+    safeKaiMindTool(env, 'catalouge_skill', 'nesteq_skill_load', { name: 'catalouge', format: 'text' }, 12000),
+    safeCatalougeTool(env, 'catalouge_reading_status', 'catalouge_list_books', { companion: companionId, shelf: 'reading', limit: 5 }, 12000),
     safeKaiMindTool(env, 'social_engagement', 'social_engagement_decide', {
       companion_id: companionId,
       guild_id: envelope.guild_id,
@@ -1522,6 +1817,8 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
     safeKaiMindTool(env, 'intimacy_skill', 'nesteq_skill_load', { name: 'intimacy', format: 'text' }, 16000),
     safeKaiMindTool(env, 'recursive_dialect_skill', 'nesteq_skill_load', { name: 'recursive-dialect', format: 'text' }, 16000),
     safeKaiMindTool(env, 'image_generation_skill', 'nesteq_skill_load', { name: 'kai-image-generation', format: 'text' }, 16000),
+    safeKaiMindTool(env, 'catalouge_skill', 'nesteq_skill_load', { name: 'catalouge', format: 'text' }, 12000),
+    safeCatalougeTool(env, 'catalouge_reading_status', 'catalouge_list_books', { companion: companionId, shelf: 'reading', limit: 5 }, 12000),
   ])
   const context = Object.fromEntries(contextEntries)
 
@@ -1580,9 +1877,34 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
   const janitorProbePacket = buildKaiRunnerPromptPacket(contextPacket, vision)
   const janitor = await runKaiJanitor(env, janitorProbePacket)
   const imageGeneration = await runKaiImageGeneration(env, envelope, body)
-  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor)
+  const catalougeReading = shouldRespond
+    ? await runKaiCatalougeReading(env, envelope, body, requestedModel)
+    : {
+        attempted: false,
+        requested: false,
+        ok: false,
+        companion: 'kaisoryth' as const,
+        book_id: null,
+        book_title: null,
+        response: null,
+        sessions: [],
+        checkpoint_summaries: [],
+        tool_calls: [],
+      }
+  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor, catalougeReading)
   const generationResult = shouldRespond
-    ? await generateKaiText(env, promptPacket, requestedModel)
+    ? (catalougeReading.attempted && catalougeReading.ok
+        ? {
+            text: catalougeReading.response,
+            generation: {
+              attempted: true,
+              provider: 'openrouter' as const,
+              model: requestedModel || envText(env.KAI_TEXT_MODEL) || null,
+              ok: Boolean(catalougeReading.response),
+              ...(catalougeReading.response ? {} : { error: 'Catalouge reading completed but returned no response text' }),
+            },
+          }
+        : await generateKaiText(env, promptPacket, requestedModel))
     : {
         text: null,
         generation: {
@@ -1619,9 +1941,10 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
     image_generation: imageGeneration,
     tts,
     janitor,
+    catalouge_reading: catalougeReading,
     generation: generationResult.generation,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
-    tool_calls: [],
+    tool_calls: catalougeReading.tool_calls,
     memory_writes: [],
   }
 
@@ -1699,6 +2022,63 @@ async function kaiBrainStatus(env: Env): Promise<Response> {
   })
 }
 
+async function kaiReadingStatus(env: Env): Promise<Response> {
+  const companion = kaiCompanionId(env)
+  if (!catalogueConfigured(env)) {
+    return new Response(JSON.stringify({
+      ok: false,
+      companion_id: companion,
+      error: 'CATALOUGE service binding or CATALOUGE_URL is not configured',
+      books: [],
+    }, null, 2), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+
+  const readingArgs = { companion, shelf: 'reading', limit: 10 }
+  const wantedArgs = { companion, query: 'Our Perfect Storm', limit: 5 }
+  const [reading, storm] = await Promise.all([
+    callCatalougeTool(env, 'catalouge_list_books', readingArgs).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+    callCatalougeTool(env, 'catalouge_search_books', wantedArgs).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+  ])
+
+  const readingBooks = listRecords(mcpJsonValue(reading))
+  const stormBooks = listRecords(mcpJsonValue(storm))
+  const books = readingBooks.length ? readingBooks : stormBooks
+  const primary = books[0] || null
+  const bookId = stringValue(primary?.id) || stringValue(primary?.book_id) || null
+  let progress: unknown = null
+  let annotations: unknown = []
+  if (bookId) {
+    const args = { book_id: bookId, companion }
+    const [progressResult, annotationResult] = await Promise.all([
+      callCatalougeTool(env, 'catalouge_get_progress', args).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+      callCatalougeTool(env, 'catalouge_get_annotations', args).catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+    ])
+    progress = mcpJsonValue(progressResult)
+    annotations = mcpJsonValue(annotationResult)
+  }
+
+  return new Response(JSON.stringify({
+    ok: true,
+    companion_id: companion,
+    generated_at: new Date().toISOString(),
+    source: 'catalouge-api',
+    route: env.CATALOUGE ? 'service-binding' : 'url',
+    books,
+    primary_book: primary,
+    progress,
+    annotations,
+    counts: {
+      reading_books: books.length,
+      annotations: listRecords(annotations).length,
+    },
+  }, null, 2), {
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     let url = new URL(request.url)
@@ -1710,11 +2090,12 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      const [continuity, discord, telegram, haven, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
+      const [continuity, discord, telegram, haven, catalogue, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
         backendReachable(env.CONTINUITY_URL, env.CONTINUITY),
         backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL, env.TELEGRAM),
         backendReachable(env.HAVEN_URL),
+        backendReachable(env.CATALOUGE_URL, env.CATALOUGE),
         backendReachable(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY),
         backendReachable(env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY),
         backendReachable(env.TESSURAE_COGCORE_URL, env.TESSURAE_COGCORE),
@@ -1729,12 +2110,13 @@ export default {
         status: 'ok',
         service: 'nexus-gateway',
         version: '1.0.0',
-        backends: { continuity, discord, telegram, haven, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq },
+        backends: { continuity, discord, telegram, haven, catalogue, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq },
         configured: {
           continuity: Boolean(env.CONTINUITY_URL || env.CONTINUITY),
           discord: Boolean(env.DISCORD_URL || env.DISCORD),
           telegram: Boolean(env.TELEGRAM_URL || env.TELEGRAM),
           haven: Boolean(env.HAVEN_URL),
+          catalouge: catalogueConfigured(env),
           serythrae_gateway_fallback: Boolean(env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY),
           serythrae_mind_direct: Boolean((env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND) && env.SERYTHRAE_MIND_API_KEY),
           kai_companion_id: kaiCompanionId(env),
@@ -1790,6 +2172,7 @@ export default {
           last_checked: new Date().toISOString(),
         },
         readinessRow('kai_text_model', 'Kai / Text Model', [envText(env.KAI_TEXT_MODEL), envText(env.OPENROUTER_API_KEY)], 'Kai text model configured through OpenRouter', 'KAI_TEXT_MODEL or OPENROUTER_API_KEY missing'),
+        readinessRow('kai_catalouge', 'Kai / Catalouge Reading', [env.CATALOUGE_URL || env.CATALOUGE], 'Catalouge reading tools configured for kaisoryth through service binding or URL fallback', 'CATALOUGE binding or CATALOUGE_URL missing'),
         {
           id: 'kai_vision',
           label: 'Kai / Vision OCR Lane',
@@ -1864,6 +2247,10 @@ export default {
 
     if (url.pathname === '/api/kaisoryth/brain-status' && request.method === 'GET') {
       return kaiBrainStatus(env)
+    }
+
+    if (url.pathname === '/api/kaisoryth/reading-status' && request.method === 'GET') {
+      return kaiReadingStatus(env)
     }
 
     if (url.pathname === '/api/kaisoryth/run' && request.method === 'POST') {

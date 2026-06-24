@@ -5,6 +5,7 @@ export interface Env {
   TELEGRAM?: Fetcher
   TAHL?: Fetcher
   ARCHIVE?: Fetcher
+  CATALOUGE?: Fetcher
   SERYTHRAE_GATEWAY?: Fetcher
   SERYTHRAE_MIND?: Fetcher
   TESSURAE_GATEWAY?: Fetcher
