@@ -126,10 +126,24 @@ const REST_TOOLS: RestTool[] = [
     trigger: z.string().optional(),
     depth: z.enum(['surface', 'processing', 'deep']).optional(),
     source: z.string().optional(),
+    reflection_schema_version: z.string().optional(),
+    payload_json: z.any().optional(),
+    confidence: z.enum(['low', 'medium', 'high']).optional(),
+    privacy_level: z.number().int().min(0).max(3).optional(),
+    review_state: z.enum(['draft', 'reviewed', 'needs-correction', 'superseded']).optional(),
+    supersedes_reflection_id: z.string().uuid().optional(),
+    ui_summary: z.string().optional(),
   }},
   { name: 'recall_reflections', desc: 'Query past reflections', path: '/api/reflection/recall', schema: {
     limit: z.number().optional(),
     depth: z.string().optional(),
+    min_depth: z.number().optional(),
+    reflection_type: z.enum(['observation', 'pattern', 'insight', 'synthesis', 'question', 'intention']).optional(),
+    source: z.string().optional(),
+    trigger: z.string().optional(),
+    reflection_schema_version: z.string().optional(),
+    review_state: z.enum(['draft', 'reviewed', 'needs-correction', 'superseded']).optional(),
+    max_privacy_level: z.number().int().min(0).max(3).optional(),
   }},
   { name: 'get_processing_context', desc: 'Gather recent memories, sessions, emotions, reflections for deep processing', path: '/api/reflection/context', schema: {} },
 
@@ -425,6 +439,14 @@ export function registerCogCorTools(server: McpServer, env: Env) {
         if (!body.recovery_action && body.recovery) { body.recovery_action = body.recovery }
         delete body.patterns
         delete body.recovery
+      }
+      if (tool.name === 'store_reflection' && normalizeCompanionId(comp) === 'axiom') {
+        body.companion = 'axiom'
+      }
+      if (tool.name === 'recall_reflections' && body.depth && body.min_depth === undefined) {
+        const depthMap: Record<string, number> = { surface: 0, processing: 1, deep: 2 }
+        body.min_depth = depthMap[String(body.depth).toLowerCase()] ?? Number(body.depth)
+        delete body.depth
       }
       return callGuardedCogCore(env, comp, tool.name, body)
     })

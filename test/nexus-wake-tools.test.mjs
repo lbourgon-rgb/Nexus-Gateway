@@ -42,6 +42,24 @@ test('shared Tahl tools require explicit companion ids', () => {
   assert.match(tahlTools, /companion_id: z\.string\(\)\.describe/);
 });
 
+test('Axiom structured reflection fields are exposed through Nexus without changing Tahl naming', () => {
+  for (const field of [
+    'reflection_schema_version',
+    'payload_json',
+    'privacy_level',
+    'review_state',
+    'supersedes_reflection_id',
+    'ui_summary',
+    'max_privacy_level',
+  ]) {
+    assert.ok(cogcorTools.includes(field), `missing ${field}`);
+  }
+  assert.match(cogcorTools, /body\.companion = 'axiom'/);
+  assert.match(cogcorTools, /body\.min_depth = depthMap/);
+  assert.match(cogcorTools, /store_reflection'[\s\S]{0,600}source\.startsWith\('axiom-reviewed'\)/);
+  assert.doesNotMatch(cogcorTools, /companion_id:\s*z\./);
+});
+
 test('Keth-Grok is canonical but is not routed through CogCore', () => {
   assert.match(identitySource, /'grok-keth'/);
   assert.match(identitySource, /grok:\s*'grok-keth'/);
