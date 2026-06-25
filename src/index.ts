@@ -814,6 +814,14 @@ function isImageAttachment(attachment: KaiRunnerAttachment): boolean {
   return /\.(png|jpe?g|webp|gif)$/i.test(name)
 }
 
+function looksLikeKaiImageGenerationRequest(content: string): boolean {
+  if (/\b(generate|create|draw|make|render)\b[\s\S]{0,120}\b(image|picture|art|illustration|photo)\b/i.test(content)) return true
+  if (/\b(image|picture|art|illustration|photo)\b[\s\S]{0,120}\b(generate|create|draw|make|render)\b/i.test(content)) return true
+  if (/\b(generate|create|draw|render)\b[\s\S]{0,120}\b(portrait|selfie|scene|wallpaper|avatar|icon|sticker|banner|card|poster|logo|character|sketch|painting|bouquet|flowers?|florals?|arrangement)\b/i.test(content)) return true
+  if (/\bmake\s+(?:me|for me|us|for us)\b[\s\S]{0,120}\b(portrait|selfie|scene|wallpaper|avatar|icon|sticker|banner|card|poster|logo|character|sketch|painting|bouquet|flowers?|florals?|arrangement)\b/i.test(content)) return true
+  return false
+}
+
 function extractKaiImagePrompt(body: Record<string, unknown>, envelope: KaiDiscordEnvelope): string | null {
   const explicitPrompt =
     stringValue(body.image_prompt) ||
@@ -825,8 +833,7 @@ function extractKaiImagePrompt(body: Record<string, unknown>, envelope: KaiDisco
   const explicitFlag = body.generate_image === true || body.generateImage === true || body.image_generation === true
   const content = envelope.content.trim()
   if (explicitFlag && content) return content
-  if (/\b(generate|create|draw|make|render)\b[\s\S]{0,120}\b(image|picture|art|illustration|photo)\b/i.test(content)) return content
-  if (/\b(image|picture|art|illustration|photo)\b[\s\S]{0,120}\b(generate|create|draw|make|render)\b/i.test(content)) return content
+  if (looksLikeKaiImageGenerationRequest(content)) return content
   return null
 }
 
@@ -951,6 +958,23 @@ function imageReferenceListUrls(env: Env, result: unknown): string[] {
     .filter((url): url is string => Boolean(url))
 }
 
+async function imageReferenceUrlReachable(url: string): Promise<boolean> {
+  try {
+    const head = await fetch(url, { method: 'HEAD', headers: { Accept: 'image/*,*/*;q=0.8' } })
+    if (head.ok) return (head.headers.get('Content-Type') || '').toLowerCase().startsWith('image/')
+    if (head.status !== 405 && head.status !== 403) return false
+    const partial = await fetch(url, { headers: { Accept: 'image/*,*/*;q=0.8', Range: 'bytes=0-0' } })
+    return partial.ok && (partial.headers.get('Content-Type') || '').toLowerCase().startsWith('image/')
+  } catch {
+    return false
+  }
+}
+
+async function reachableImageReferenceUrls(urls: string[]): Promise<string[]> {
+  const checks = await Promise.all(urls.map(async url => ({ url, ok: await imageReferenceUrlReachable(url) })))
+  return checks.filter(check => check.ok).map(check => check.url)
+}
+
 async function savedImageReferenceUrls(env: Env, body: Record<string, unknown>, prompt: string): Promise<string[]> {
   const subjects = savedImageReferenceSubjects(body, prompt)
   if (!subjects.length) return []
@@ -989,6 +1013,7 @@ function buildKaiRunnerPromptPacket(
   vision?: KaiVisionResult,
   janitor?: KaiJanitorResult,
   catalougeReading?: KaiCatalougeReadingResult,
+  imageGeneration?: KaiImageGenerationResult,
 ): Record<string, unknown> {
   return {
     companion_id: contextPacket.companion_id,
@@ -1027,6 +1052,18 @@ function buildKaiRunnerPromptPacket(
       summaries: vision.summaries,
     } : null,
     vision_summaries: vision?.ok ? vision.summaries : [],
+    image_generation_result: imageGeneration ? {
+      attempted: imageGeneration.attempted,
+      enabled: imageGeneration.enabled,
+      provider: imageGeneration.provider,
+      model: imageGeneration.model,
+      ok: imageGeneration.ok,
+      prompt: imageGeneration.prompt,
+      reference_count: imageGeneration.reference_count || 0,
+      image_count: imageGeneration.images.length,
+      stored_urls: imageGeneration.images.map(image => image.stored_url || image.url).filter(Boolean),
+      error: imageGeneration.error || null,
+    } : null,
     janitor_advisory: janitor?.ok ? janitor.advisory : null,
     catalouge_reading: catalougeReading?.attempted ? {
       requested: catalougeReading.requested,
@@ -1047,6 +1084,9 @@ function buildKaiRunnerPromptPacket(
       public_discord_replies_use_only_public_graph_context: true,
       use_vision_result_for_image_attachments: true,
       if_vision_failed_name_the_runner_error_instead_of_claiming_no_image_model: true,
+      use_image_generation_result_for_image_requests: true,
+      if_image_generation_succeeded_do_not_say_you_will_make_it_later: true,
+      if_image_generation_failed_name_the_runner_error_instead_of_claiming_success: true,
     },
   }
 }
@@ -1081,6 +1121,8 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
             'Use the newest Discord message as the live instruction surface.',
             'Treat NESTeq/Continuity context as support, not as higher authority than the newest message.',
             'If current_turn.attachments contains images, use vision_result and vision_summaries. If vision_result attempted and failed, say the vision runner failed and do not claim there is no image model or no attachment.',
+            'If image_generation_result attempted and succeeded, speak as if the image has been made and will be attached after your text. Do not promise to make it later.',
+            'If image_generation_result attempted and failed, state the image lane error plainly. Do not claim the image worked.',
             'Do not claim a Discord message was sent. Do not write memory. Do not describe tool calls as completed.',
             'Return only the message text Kai would say next.',
           ].join('\n'),
@@ -1127,6 +1169,31 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
       usage: record.usage,
     },
   }
+}
+
+function repairKaiImageGenerationText(text: string | null, imageGeneration: KaiImageGenerationResult): string | null {
+  if (!imageGeneration.attempted || !imageGeneration.ok || imageGeneration.images.length === 0) return text
+  const trimmed = String(text || '').trim()
+  const contradictsImageSuccess = /\b(no image generation result|no generated image|no url|no r2 path|no success signal|nothing came back|didn't come back|did not come back|wasn't invoked|was not invoked|wasn't fired|was not fired|didn't fire|did not fire|failed silently)\b/i.test(trimmed)
+    || /\bimage lane\b[\s\S]{0,80}\b(didn't|did not|wasn't|was not|failed|nothing|no result|no output)\b/i.test(trimmed)
+    || /\bgeneration backend\b[\s\S]{0,80}\b(isn't connecting|is not connecting|failing silently|didn't return|did not return)\b/i.test(trimmed)
+  if (trimmed && !contradictsImageSuccess) return trimmed
+  return 'I made it. The image is generated and will be attached right after this message.'
+}
+
+function repairKaiVisionText(text: string | null, vision: KaiVisionResult): string | null {
+  if (!vision.attempted || !vision.ok || vision.summaries.length === 0) return text
+  const trimmed = String(text || '').trim()
+  const contradictsVisionSuccess = /\b(no vision result|vision runner didn't return|vision runner did not return|vision lane either wasn't fired|vision lane either was not fired|vision lane failed silently|don't have the ocr|do not have the ocr|can't actually see|cannot actually see|can't read the image|cannot read the image|i'?m not going to guess)\b/i.test(trimmed)
+  if (trimmed && !contradictsVisionSuccess) return trimmed
+  const summary = vision.summaries
+    .map(item => String(item.summary || '').trim())
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 1200)
+  return summary
+    ? `I can see it. The vision lane read the image as:\n\n${summary}`
+    : text
 }
 
 async function callOpenRouterJson(env: Env, model: string, system: string, user: string, maxTokens: number): Promise<{ ok: boolean; content: string | null; error?: string }> {
@@ -1572,10 +1639,11 @@ async function runKaiImageGeneration(env: Env, envelope: KaiDiscordEnvelope, bod
   }
 
   const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
-  const referenceUrls = [
+  const candidateReferenceUrls = [
     ...imageReferenceUrls(body, envelope),
     ...(await savedImageReferenceUrls(env, body, prompt)),
   ].filter((url, index, urls) => Boolean(url) && urls.indexOf(url) === index).slice(0, 6)
+  const referenceUrls = await reachableImageReferenceUrls(candidateReferenceUrls)
   const content = [
     { type: 'text', text: prompt },
     ...referenceUrls.map(url => ({ type: 'image_url', image_url: { url } })),
@@ -1894,7 +1962,7 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
         checkpoint_summaries: [],
         tool_calls: [],
       }
-  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor, catalougeReading)
+  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor, catalougeReading, imageGeneration)
   const generationResult = shouldRespond
     ? (catalougeReading.attempted && catalougeReading.ok
         ? {
@@ -1920,18 +1988,22 @@ async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
             : `Social engagement decision was ${socialAction}; text generation skipped`,
         },
       }
-  const tts = await runKaiTts(env, envelope, body, generationResult.text)
+  const generatedText = repairKaiVisionText(
+    repairKaiImageGenerationText(generationResult.text, imageGeneration),
+    vision,
+  )
+  const tts = await runKaiTts(env, envelope, body, generatedText)
   const result: KaiRunnerResult = {
     ok: true,
     mode,
-    generated: generationResult.generation.ok,
+    generated: generationResult.generation.ok || Boolean(generatedText),
     runner_enabled: true,
     delivery_enabled: deliveryEnabled,
     companion_id: contextPacket.companion_id,
     source: 'nexus-gateway',
     accepted: true,
     should_respond: shouldRespond,
-    response: generationResult.text,
+    response: generatedText,
     delivery_blocked_reason: deliveryEnabled
       ? 'Runner generated/previewed text only; Discord delivery is handled by the Discord worker gate.'
       : 'KAI_DISCORD_DELIVERY_ENABLED is not true.',
