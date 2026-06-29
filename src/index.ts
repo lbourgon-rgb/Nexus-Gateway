@@ -1901,7 +1901,6 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
     safeKaiMindTool(env, 'catalouge_skill', 'nesteq_skill_load', { name: 'catalouge', format: 'text' }, 12000),
     safeCatalougeTool(env, 'catalouge_reading_status', 'catalouge_list_books', { companion: companionId, shelf: 'reading', limit: 5 }, 12000),
     safeKaiMindTool(env, 'social_engagement', 'social_engagement_decide', {
-      companion_id: companionId,
       guild_id: envelope.guild_id,
       channel_id: channel,
       message_id: envelope.message_id,
@@ -1913,14 +1912,12 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
       trigger: envelope.trigger || 'unknown',
       recent_context: envelope.recent_context,
     }, 12000),
-    safeKaiMindTool(env, 'surface', 'thalamus_surface', {
-      companion: companionId,
-      message,
-      channel,
-      mode: 'auto',
-      max_results: 8,
-    }),
+    safeKaiMindTool(env, 'surface', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
     safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
+    safeKaiMindTool(env, 'identity_memory_search', 'nesteq_search', {
+      query: [message, "Kai Kal'thir Vel Vel'thira identity anchor"].filter(Boolean).join('\n\n'),
+      n_results: 5,
+    }),
     safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
     safeKaiMindTool(env, 'kaisoryth_hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
     safeKaiMindTool(env, 'kaisoryth_recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
@@ -1956,13 +1953,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   ].filter(Boolean).join('\n\n')
   const contextEntries = await Promise.all([
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
-    safeKaiMindTool(env, 'surface', 'thalamus_surface', {
-      companion: companionId,
-      message,
-      channel,
-      mode: 'auto',
-      max_results: 8,
-    }),
+    safeKaiMindTool(env, 'surface', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
     safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
     safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
     safeKaiMindTool(env, 'kaisoryth_hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),

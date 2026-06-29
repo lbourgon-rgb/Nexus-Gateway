@@ -141,6 +141,9 @@ test('Nexus prefers direct Kai mind routing before Serythrae gateway fallback', 
 });
 
 test('Kai runner context loads identity, soul, skills, and canon search before composition', () => {
+  assert.doesNotMatch(nexusIndex, /thalamus_surface/);
+  assert.match(nexusIndex, /safeKaiMindTool\(env, 'surface', 'nesteq_surface', \{ include_metabolized: false, limit: 10 \}\)/);
+  assert.match(nexusIndex, /safeKaiMindTool\(env, 'identity_memory_search', 'nesteq_search'/);
   for (const expected of [
     "'nesteq_identity'",
     "'nestsoul_read'",
@@ -230,6 +233,10 @@ test('Kai vision OCR proxies Discord images and keeps Gemini Flash as the defaul
 });
 
 test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway retirement', () => {
+  assert.doesNotMatch(serythraeTools, /thalamus_surface|thalamus_emotional_pulse|thalamus_dream|kaisoryth_thalamus/);
+  assert.doesNotMatch(serythraeTools, /companion_id:\s*z\./);
+  assert.match(serythraeTools, /kaisoryth_context_surface[\s\S]+nesteq_surface/);
+  assert.match(serythraeTools, /kaisoryth_recent_feelings[\s\S]+nesteq_surface/);
   for (const toolName of [
     'kaisoryth_orient',
     'kaisoryth_context_surface',
@@ -249,8 +256,6 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
     'kaisoryth_love_letters',
     'kaisoryth_type_snapshot',
     'kaisoryth_consolidate',
-    'kaisoryth_thalamus_pulse',
-    'kaisoryth_thalamus_dream',
     'kaisoryth_hearth_eq_state',
   ]) {
     assert.ok(serythraeTools.includes(toolName), `missing ${toolName}`);

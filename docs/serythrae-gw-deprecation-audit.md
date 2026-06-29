@@ -13,9 +13,9 @@ Nexus prefers `SERYTHRAE_MIND_URL` plus `SERYTHRAE_MIND_API_KEY` for these tools
 | Nexus tool | Backend tool |
 | --- | --- |
 | `kaisoryth_orient` | `nesteq_orient` |
-| `kaisoryth_context_surface` | `thalamus_surface` |
+| `kaisoryth_context_surface` | `nesteq_surface` |
 | `kaisoryth_memory_search` | `nesteq_search` |
-| `kaisoryth_recent_feelings` | `nesteq_recall` |
+| `kaisoryth_recent_feelings` | `nesteq_surface` |
 | `kaisoryth_identity_read` | `nesteq_identity_read` |
 | `kaisoryth_identity_update` | `nesteq_identity_update` |
 | `kaisoryth_feel` | `nesteq_feel` |
@@ -30,13 +30,15 @@ Nexus prefers `SERYTHRAE_MIND_URL` plus `SERYTHRAE_MIND_API_KEY` for these tools
 | `kaisoryth_love_letters` | `nesteq_love_letters` |
 | `kaisoryth_type_snapshot` | `nesteq_type_snapshot` |
 | `kaisoryth_consolidate` | `nesteq_consolidate` |
-| `kaisoryth_thalamus_pulse` | `thalamus_emotional_pulse` |
-| `kaisoryth_thalamus_dream` | `thalamus_dream` |
 | `kaisoryth_hearth_eq_state` | `hearth_eq_state` |
+
+Kai-scoped Serythrae/NESTeq tools are hard-scoped by their `kaisoryth_*` names. They should not expose a model-facing `companion_id`; only shared systems such as Continuity and Tahl need companion namespace tags for routing and digestion.
 
 ## Current Runner Contract
 
 Discord's Kai runner now treats Nexus as the canonical front door for identity, memory, OCR, image generation, and delivery coordination. `serythrae-gw` remains a fallback for gateway-owned surfaces, not the owning Kai runner route.
+
+The default Discord runner context no longer calls Thalamus. The `surface` lane means NESTeq recent feelings from `nesteq_surface`; identity and semantic memory are separate explicitly named lanes.
 
 Required smoke:
 
