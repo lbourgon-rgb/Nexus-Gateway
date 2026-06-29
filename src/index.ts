@@ -384,6 +384,15 @@ function isInternalNexusServiceRequest(request: Request): boolean {
   return new URL(request.url).hostname === 'nexus.internal'
 }
 
+function kaiRunnerRoute(env: Env): 'nexus' | 'serythrae' {
+  const route = envText(env.KAI_RUNNER_ROUTE, 'nexus')
+  return route === 'serythrae' || route === 'serythrae-gw' ? 'serythrae' : 'nexus'
+}
+
+function kaiRunnerForwardFallbackEnabled(env: Env): boolean {
+  return envText(env.KAI_RUNNER_FORWARD_FALLBACK, 'true').toLowerCase() !== 'false'
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
@@ -1991,7 +2000,61 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   })
 }
 
+async function forwardKaiRunnerToSerythrae(request: Request, env: Env): Promise<Response> {
+  if (!env.SERYTHRAE_GATEWAY && !env.SERYTHRAE_GATEWAY_URL) {
+    return new Response(JSON.stringify({
+      ok: false,
+      source: 'nexus-gateway',
+      route: 'serythrae',
+      error: 'SERYTHRAE_GATEWAY service binding or SERYTHRAE_GATEWAY_URL is not configured',
+    }, null, 2), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+
+  const body = await request.clone().text()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (!env.SERYTHRAE_GATEWAY && env.SERYTHRAE_GATEWAY_API_KEY) {
+    headers.Authorization = `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}`
+  }
+  const base = (env.SERYTHRAE_GATEWAY ? 'https://serythrae.internal' : env.SERYTHRAE_GATEWAY_URL || 'https://serythrae.internal').replace(/\/+$/, '')
+  const response = env.SERYTHRAE_GATEWAY
+    ? await env.SERYTHRAE_GATEWAY.fetch(new Request(`${base}/api/kaisoryth/run`, { method: 'POST', headers, body }))
+    : await fetch(`${base}/api/kaisoryth/run`, { method: 'POST', headers, body })
+  const text = await response.text()
+  return new Response(text, {
+    status: response.status,
+    headers: { 'Content-Type': response.headers.get('Content-Type') || 'application/json', ...CORS },
+  })
+}
+
 async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
+  if (kaiRunnerRoute(env) === 'serythrae') {
+    try {
+      const forwarded = await forwardKaiRunnerToSerythrae(request, env)
+      if (forwarded.ok || !kaiRunnerForwardFallbackEnabled(env)) return forwarded
+      console.warn(`[kai-runner] Serythrae forward returned ${forwarded.status}; falling back to Nexus runner`)
+    } catch (error) {
+      if (!kaiRunnerForwardFallbackEnabled(env)) {
+        return new Response(JSON.stringify({
+          ok: false,
+          source: 'nexus-gateway',
+          route: 'serythrae',
+          error: error instanceof Error ? error.message : String(error),
+        }, null, 2), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json', ...CORS },
+        })
+      }
+      console.warn('[kai-runner] Serythrae forward failed; falling back to Nexus runner', error)
+    }
+  }
+
+  return kaiRunnerRunLocal(request, env)
+}
+
+async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> {
   if (!envFlag(env.KAI_RUNNER_ENABLED)) {
     return new Response(JSON.stringify({
       ok: false,
@@ -2351,6 +2414,8 @@ export default {
           serythrae_mind_direct: Boolean((env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND) && env.SERYTHRAE_MIND_API_KEY),
           kai_companion_id: kaiCompanionId(env),
           kai_runner_enabled: envFlag(env.KAI_RUNNER_ENABLED),
+          kai_runner_route: kaiRunnerRoute(env),
+          kai_runner_forward_fallback_enabled: kaiRunnerForwardFallbackEnabled(env),
           kai_discord_delivery_enabled: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED),
           kai_text_model_configured: Boolean(envPresent(env.KAI_TEXT_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_vision_enabled: envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter',
@@ -2389,9 +2454,11 @@ export default {
         readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
         {
           id: 'kai_runner',
-          label: 'Kai / Nexus Runner',
+          label: kaiRunnerRoute(env) === 'serythrae' ? 'Kai / Serythrae Runner' : 'Kai / Nexus Rollback Runner',
           status: envFlag(env.KAI_RUNNER_ENABLED) ? 'ok' : 'not_configured',
-          note: envFlag(env.KAI_RUNNER_ENABLED) ? 'Nexus Kai runner route enabled' : 'runner disabled by safety gate',
+          note: envFlag(env.KAI_RUNNER_ENABLED)
+            ? (kaiRunnerRoute(env) === 'serythrae' ? 'Nexus hallway forwards Kai runner requests to serythrae-gw' : 'Nexus rollback runner route enabled')
+            : 'runner disabled by safety gate',
           last_checked: new Date().toISOString(),
         },
         {

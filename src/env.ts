@@ -57,6 +57,8 @@ export interface Env {
   OPENROUTER_BASE_URL?: string
   ELEVENLABS_API_KEY?: string
   KAI_COMPANION_ID?: string
+  KAI_RUNNER_ROUTE?: string
+  KAI_RUNNER_FORWARD_FALLBACK?: string
   KAI_RUNNER_ENABLED?: string
   KAI_DISCORD_DELIVERY_ENABLED?: string
   KAI_CONTINUITY_URL?: string

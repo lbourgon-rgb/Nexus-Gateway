@@ -98,6 +98,8 @@ GROK_KETH_NESTEQ_URL = "https://grok-keth-nesteq.lbourgon.workers.dev"
 VELASTRAHQ_GATEWAY_URL = "https://velastrahq-gw.lbourgon.workers.dev"
 VELASTRAHQ_API_URL = "https://velastrahq-api.lbourgon.workers.dev"
 VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
+KAI_RUNNER_ROUTE = "serythrae"
+KAI_RUNNER_FORWARD_FALLBACK = "true"
 
 # Secrets:
 # - MCP_API_KEY protects /mcp and /sse endpoints.

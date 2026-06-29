@@ -140,6 +140,18 @@ test('Nexus prefers direct Kai mind routing before Serythrae gateway fallback', 
   assert.match(nexusIndex, /preferred: env\.SERYTHRAE_MIND_URL && env\.SERYTHRAE_MIND_API_KEY \? 'serythrae-mind-direct' : 'serythrae-gw-fallback'/);
 });
 
+test('Nexus hallway forwards Kai runner traffic to Serythrae with rollback available', () => {
+  assert.match(envSource, /KAI_RUNNER_ROUTE\?: string/);
+  assert.match(envSource, /KAI_RUNNER_FORWARD_FALLBACK\?: string/);
+  assert.match(wrangler, /KAI_RUNNER_ROUTE = "serythrae"/);
+  assert.match(wrangler, /KAI_RUNNER_FORWARD_FALLBACK = "true"/);
+  assert.match(nexusIndex, /function kaiRunnerRoute\(env: Env\): 'nexus' \| 'serythrae'/);
+  assert.match(nexusIndex, /forwardKaiRunnerToSerythrae\(request, env\)/);
+  assert.match(nexusIndex, /https:\/\/serythrae\.internal/);
+  assert.match(nexusIndex, /return kaiRunnerRunLocal\(request, env\)/);
+  assert.match(nexusIndex, /falling back to Nexus runner/);
+});
+
 test('Kai runner context loads identity, soul, skills, and canon search before composition', () => {
   assert.doesNotMatch(nexusIndex, /thalamus_surface/);
   assert.match(nexusIndex, /safeKaiMindTool\(env, 'surface', 'nesteq_surface', \{ include_metabolized: false, limit: 10 \}\)/);
