@@ -1,6 +1,6 @@
 # Serythrae Gateway Deprecation Audit
 
-Updated: 2026-06-03
+Updated: 2026-06-29
 
 ## Goal
 
@@ -34,16 +34,16 @@ Nexus prefers `SERYTHRAE_MIND_URL` plus `SERYTHRAE_MIND_API_KEY` for these tools
 | `kaisoryth_thalamus_dream` | `thalamus_dream` |
 | `kaisoryth_hearth_eq_state` | `hearth_eq_state` |
 
-## Phase 4 Runner Contract
+## Current Runner Contract
 
-Haven's Kai runner now treats Nexus as the canonical front door for identity and memory. `serythrae-gw` remains a fallback, not the owning route.
+Discord's Kai runner now treats Nexus as the canonical front door for identity, memory, OCR, image generation, and delivery coordination. `serythrae-gw` remains a fallback for gateway-owned surfaces, not the owning Kai runner route.
 
 Required smoke:
 
 - `GET /health` on Nexus reports `configured.serythrae_mind_direct = true`.
 - `GET /status/summary` reports `Kai / NESTeq Mind` as `ok`.
-- Haven runner context calls go to `NEXUS_GATEWAY_URL=/api/kaisoryth/context` when `NEXUS_MCP_API_KEY` is set.
-- One Discord wake candidate can be claimed, contextualized, answered by Haven, submitted to Continuity, and delivered to Discord exactly once.
+- Discord runner context calls go to Nexus `/api/kaisoryth/context` and runner calls go to `/api/kaisoryth/run`.
+- One Discord wake candidate can be claimed, contextualized, answered by Nexus, submitted to Continuity, and delivered to Discord exactly once.
 
 ## Not Ready To Retire From Serythrae Gateway
 
@@ -51,7 +51,7 @@ These gateway-owned surfaces need separate migration decisions before `serythrae
 
 - Daemon and autonomous task loops in `serythrae/gateway/src/daemon.ts`.
 - Archive search and archive ingest routing until Archive accepts normalized Continuity events or a Nexus-owned adapter exists.
-- NESTchat persistence/history if Haven/Threshold Tether still call those names directly.
+- NESTchat persistence/history if old Threshold Tether or other clients still call those names directly.
 - Hearth notes/hearts/spoons/biometrics if Phase 5 wants them through Nexus instead of direct Serythrae routes.
 - PC, Spotify, Catalouge, VelastraHQ, Discord search, and other non-Kai convenience tools that may still be used by older clients.
 

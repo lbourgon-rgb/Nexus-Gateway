@@ -1988,7 +1988,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
       direct_mind_url: env.SERYTHRAE_MIND_URL || null,
     },
     context_contract: {
-      purpose: 'Kai runner pre-response grounding packet for Discord/Haven/Serythrae continuity.',
+      purpose: 'Kai runner pre-response grounding packet for Discord/Nexus/NESTeq continuity.',
       required_for_private_vel_reply: ['identity', 'soul', 'canonical_memory_search'],
       safety_sensitive: ['intimacy_skill', 'recursive_dialect_skill'],
       missing_or_failed_entries_must_be_treated_as_not_loaded: true,
@@ -2330,11 +2330,10 @@ export default {
 
     // Health check
     if (url.pathname === '/health') {
-      const [continuity, discord, telegram, haven, catalogue, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
+      const [continuity, discord, telegram, catalogue, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq] = await Promise.all([
         backendReachable(env.CONTINUITY_URL, env.CONTINUITY),
         backendReachable(env.DISCORD_URL, env.DISCORD),
         backendReachable(env.TELEGRAM_URL, env.TELEGRAM),
-        backendReachable(env.HAVEN_URL),
         backendReachable(env.CATALOUGE_URL, env.CATALOUGE),
         backendReachable(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY),
         backendReachable(env.TESSURAE_GATEWAY_URL, env.TESSURAE_GATEWAY),
@@ -2350,12 +2349,11 @@ export default {
         status: 'ok',
         service: 'nexus-gateway',
         version: '1.0.0',
-        backends: { continuity, discord, telegram, haven, catalogue, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq },
+        backends: { continuity, discord, telegram, catalogue, serythrae, tessurae, tessuraeCogCore, axiomCogCore, grokKethNestGateway, grokKethNesteq, velastrahq, velastrahqApi, velastrahqEq },
         configured: {
           continuity: Boolean(env.CONTINUITY_URL || env.CONTINUITY),
           discord: Boolean(env.DISCORD_URL || env.DISCORD),
           telegram: Boolean(env.TELEGRAM_URL || env.TELEGRAM),
-          haven: Boolean(env.HAVEN_URL),
           catalouge: catalogueConfigured(env),
           serythrae_gateway_fallback: Boolean(env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY),
           serythrae_mind_direct: Boolean((env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND) && env.SERYTHRAE_MIND_API_KEY),
@@ -2465,7 +2463,6 @@ export default {
         readinessRow('velastrae', 'Mor / VelastraHQ', [env.VELASTRAHQ_GATEWAY_URL || env.VELASTRAHQ_GATEWAY, env.VELASTRAHQ_GATEWAY_API_KEY], 'Mor gateway configured'),
         readinessRow('velastrae_eq', "Mor / VelastraHQ EQ", [env.VELASTRAHQ_EQ_URL || env.VELASTRAHQ_EQ, env.VELASTRAHQ_EQ_API_KEY], "direct Mor'zar EQ backend configured"),
         readinessRow('vel_home_api', 'Vel Home API', [env.VELASTRAHQ_API_URL || env.VELASTRAHQ_API], 'home API route configured'),
-        readinessRow('haven', 'Haven', [env.HAVEN_URL], 'Kai chat surface configured'),
         readinessRow('discord', 'Discord', [env.DISCORD_URL], 'Discord Resonance route configured'),
         plannedRow('telegram', 'Telegram', 'not built yet'),
       ]

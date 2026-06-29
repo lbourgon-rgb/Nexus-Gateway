@@ -21,7 +21,6 @@ export interface Env {
   CONTINUITY_URL?: string
   DISCORD_URL?: string
   TELEGRAM_URL?: string
-  HAVEN_URL?: string
   ARCHIVE_URL?: string
   SERYTHRAE_GATEWAY_URL?: string
   SERYTHRAE_MIND_URL?: string
