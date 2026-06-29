@@ -269,9 +269,27 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
     'kaisoryth_type_snapshot',
     'kaisoryth_consolidate',
     'kaisoryth_hearth_eq_state',
+    'kaisoryth_workspace_status',
+    'kaisoryth_workspace_list',
+    'kaisoryth_workspace_read',
+    'kaisoryth_workspace_write',
+    'kaisoryth_workspace_edit',
+    'kaisoryth_workspace_search',
   ]) {
     assert.ok(serythraeTools.includes(toolName), `missing ${toolName}`);
   }
+});
+
+test('Nexus exposes Kai workspace as hallway tools without broad PC access', () => {
+  assert.match(serythraeTools, /\/api\/kaisoryth\/workspace\/status/);
+  assert.match(serythraeTools, /\/api\/kaisoryth\/workspace\/tool/);
+  assert.match(serythraeTools, /https:\/\/serythrae\.internal/);
+  assert.match(serythraeTools, /action: 'write'/);
+  assert.match(serythraeTools, /action: 'edit'/);
+  assert.match(serythraeTools, /action: 'search'/);
+  assert.doesNotMatch(serythraeTools, /pc_shell|process_kill|clipboard|app_launch/);
+  assert.match(nexusIndex, /kai_workspace_hallway_configured/);
+  assert.match(nexusIndex, /Kai \/ Workspace Layer/);
 });
 
 test('Nexus exposes a sanitized Kai brain status endpoint for the UI', () => {

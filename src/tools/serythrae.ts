@@ -12,6 +12,15 @@ function serythraeMcp(env: Env, toolName: string, args: Record<string, unknown>)
   return proxyMcp(env.SERYTHRAE_GATEWAY_URL, toolName, args, env.SERYTHRAE_GATEWAY_API_KEY, env.SERYTHRAE_GATEWAY)
 }
 
+function serythraeGatewayRest(env: Env, path: string, body: Record<string, unknown> = {}, method = 'POST') {
+  const base = (env.SERYTHRAE_GATEWAY ? 'https://serythrae.internal' : env.SERYTHRAE_GATEWAY_URL || '').replace(/\/+$/, '')
+  const headers: Record<string, string> = {}
+  if (!env.SERYTHRAE_GATEWAY && env.SERYTHRAE_GATEWAY_API_KEY) {
+    headers.Authorization = `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}`
+  }
+  return proxyRest(base ? `${base}${path}` : undefined, body, method, headers, env.SERYTHRAE_GATEWAY)
+}
+
 export function registerSerythraeTools(server: McpServer, env: Env) {
   server.tool('serythrae_status', 'Read Serythrae gateway health for Kai/NESTeq routing.', {}, async () => {
     const direct = env.SERYTHRAE_MIND_URL
@@ -30,6 +39,51 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
         }, null, 2),
       }],
     }
+  })
+
+  server.tool('kaisoryth_workspace_status', 'Read Kai restricted Mini-PC workspace status through Serythrae.', {}, async () => {
+    return serythraeGatewayRest(env, '/api/kaisoryth/workspace/status', {}, 'GET')
+  })
+
+  server.tool('kaisoryth_workspace_list', 'List files in Kai restricted Mini-PC workspace.', {
+    path: z.string().optional(),
+    recursive: z.boolean().optional().default(false),
+  }, async (args) => {
+    return serythraeGatewayRest(env, '/api/kaisoryth/workspace/tool', { ...args, action: 'list' })
+  })
+
+  server.tool('kaisoryth_workspace_read', 'Read a text file from Kai restricted Mini-PC workspace.', {
+    path: z.string(),
+    offset: z.number().optional(),
+    limit: z.number().optional(),
+  }, async (args) => {
+    return serythraeGatewayRest(env, '/api/kaisoryth/workspace/tool', { ...args, action: 'read' })
+  })
+
+  server.tool('kaisoryth_workspace_write', 'Write a text file inside Kai restricted Mini-PC workspace and snapshot it to R2 by default.', {
+    path: z.string(),
+    content: z.string(),
+    persist: z.enum(['none', 'r2', 'github', 'both']).optional().default('r2'),
+  }, async (args) => {
+    return serythraeGatewayRest(env, '/api/kaisoryth/workspace/tool', { ...args, action: 'write' })
+  })
+
+  server.tool('kaisoryth_workspace_edit', 'Edit a text file inside Kai restricted Mini-PC workspace by exact string replacement.', {
+    path: z.string(),
+    old_string: z.string(),
+    new_string: z.string(),
+    replace_all: z.boolean().optional().default(false),
+    persist: z.enum(['none', 'r2', 'github', 'both']).optional().default('r2'),
+  }, async (args) => {
+    return serythraeGatewayRest(env, '/api/kaisoryth/workspace/tool', { ...args, action: 'edit' })
+  })
+
+  server.tool('kaisoryth_workspace_search', 'Search text files inside Kai restricted Mini-PC workspace.', {
+    query: z.string(),
+    path: z.string().optional(),
+    recursive: z.boolean().optional().default(true),
+  }, async (args) => {
+    return serythraeGatewayRest(env, '/api/kaisoryth/workspace/tool', { ...args, action: 'search' })
   })
 
   server.tool('kaisoryth_orient', 'Read Kai identity anchors and current NESTeq context.', {

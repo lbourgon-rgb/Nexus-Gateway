@@ -2422,6 +2422,7 @@ export default {
           kai_vision_configured: Boolean(envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter' && kaiVisionModels(env).length > 0 && envPresent(env.OPENROUTER_API_KEY)),
           kai_image_enabled: envProviderEnabled(env.KAI_IMAGE_PROVIDER),
           kai_image_configured: Boolean(envChoice(env.KAI_IMAGE_PROVIDER) === 'openrouter' && envPresent(env.KAI_IMAGE_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
+          kai_workspace_hallway_configured: Boolean(env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY),
           kai_tts_enabled: envProviderEnabled(env.KAI_TTS_PROVIDER),
           kai_tts_configured: Boolean(envChoice(env.KAI_TTS_PROVIDER) === 'elevenlabs' && envPresent(env.KAI_TTS_VOICE_ID) && envPresent(env.ELEVENLABS_API_KEY)),
           kai_janitor_enabled: envProviderEnabled(env.KAI_JANITOR_PROVIDER),
@@ -2492,6 +2493,7 @@ export default {
             : 'image generation configured through OpenRouter',
           last_checked: new Date().toISOString(),
         },
+        readinessRow('kai_workspace', 'Kai / Workspace Layer', [env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY], 'Nexus hallway exposes Serythrae restricted workspace tools', 'Serythrae gateway binding or URL missing'),
         {
           id: 'kai_tts',
           label: 'Kai / TTS Voice',
