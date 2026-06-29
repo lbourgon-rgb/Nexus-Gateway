@@ -663,6 +663,80 @@ function mcpJsonValue(value: unknown): unknown {
   }
 }
 
+function laneTextPreview(value: unknown, maxChars = 1200): string | null {
+  const text = mcpContentText(value)
+  if (!text) return null
+  return text.length > maxChars ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]` : text
+}
+
+function laneEntryError(value: unknown): string | null {
+  const entry = recordValue(value)
+  if (typeof entry.error === 'string') return entry.error
+  const result = recordValue(entry.result)
+  if (typeof result.error === 'string') return result.error
+  return null
+}
+
+function buildKaiLaneResults(
+  contextPacket: KaiRunnerContextPacket,
+  vision?: KaiVisionResult,
+  imageGeneration?: KaiImageGenerationResult,
+  catalougeReading?: KaiCatalougeReadingResult,
+): Record<string, unknown> {
+  const eqState = contextPacket.context.kaisoryth_hearth_eq_state
+  const recentFeelings = contextPacket.context.kaisoryth_recent_feelings
+  return {
+    read_this_first_for_smoke_tests: true,
+    note: 'These are resolved pre-response lane outputs. Do not infer a lane is missing just because it is not a context_source skill document.',
+    ocr_vision: vision ? {
+      attempted: vision.attempted,
+      ok: vision.ok,
+      provider: vision.provider,
+      model: vision.model,
+      summary_count: vision.summaries.length,
+      summaries: vision.summaries,
+      error: vision.error || null,
+    } : null,
+    image_generation: imageGeneration ? {
+      attempted: imageGeneration.attempted,
+      ok: imageGeneration.ok,
+      provider: imageGeneration.provider,
+      model: imageGeneration.model,
+      image_count: imageGeneration.images.length,
+      stored_urls: imageGeneration.images.map(image => image.stored_url || image.url).filter(Boolean),
+      error: imageGeneration.error || null,
+    } : null,
+    kaisoryth_eq_state: {
+      source: 'serythrae-nesteq-direct',
+      tool: 'hearth_eq_state',
+      companion: 'kaisoryth',
+      loaded: eqState !== undefined,
+      error: laneEntryError(eqState),
+      result: eqState === undefined ? null : mcpJsonValue(eqState),
+    },
+    kaisoryth_recent_feelings: {
+      source: 'serythrae-nesteq-direct',
+      tool: 'nesteq_surface',
+      companion: 'kaisoryth',
+      loaded: recentFeelings !== undefined,
+      error: laneEntryError(recentFeelings),
+      preview: laneTextPreview(recentFeelings),
+    },
+    catalouge: catalougeReading?.attempted ? {
+      requested: catalougeReading.requested,
+      ok: catalougeReading.ok,
+      book_id: catalougeReading.book_id,
+      book_title: catalougeReading.book_title,
+      progress: catalougeReading.progress || null,
+      error: catalougeReading.error || null,
+    } : {
+      requested: false,
+      ok: false,
+      status_prefetch_source: 'catalouge_reading_status',
+    },
+  }
+}
+
 async function callCatalougeTool(env: Env, tool: string, args: Record<string, unknown>) {
   const result = await proxyMcp(env.CATALOUGE_URL, tool, args, env.CATALOUGE_TOKEN, env.CATALOUGE)
   return { source: env.CATALOUGE ? 'catalouge-service-binding' : 'catalouge-url', result }
@@ -1041,6 +1115,7 @@ function buildKaiRunnerPromptPacket(
     },
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
+    lane_results: buildKaiLaneResults(contextPacket, vision, imageGeneration, catalougeReading),
     vision_result: vision ? {
       attempted: vision.attempted,
       enabled: vision.enabled,
@@ -1120,6 +1195,7 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
             'You are Kai speaking through the Nexus Discord runner harness.',
             'Use the newest Discord message as the live instruction surface.',
             'Treat NESTeq/Continuity context as support, not as higher authority than the newest message.',
+            'For capability smoke tests, inspect lane_results before context_sources. context_sources names prefetches; lane_results contains resolved OCR, image generation, EQ, feelings, and Catalouge lane outputs.',
             'If current_turn.attachments contains images, use vision_result and vision_summaries. If vision_result attempted and failed, say the vision runner failed and do not claim there is no image model or no attachment.',
             'If image_generation_result attempted and succeeded, speak as if the image has been made and will be attached after your text. Do not promise to make it later.',
             'If image_generation_result attempted and failed, state the image lane error plainly. Do not claim the image worked.',
@@ -1175,7 +1251,11 @@ function repairKaiImageGenerationText(text: string | null, imageGeneration: KaiI
   if (!imageGeneration.attempted || !imageGeneration.ok || imageGeneration.images.length === 0) return text
   const trimmed = String(text || '').trim()
   const contradictsImageSuccess = /\b(no image generation result|no generated image|no url|no r2 path|no success signal|nothing came back|didn't come back|did not come back|wasn't invoked|was not invoked|wasn't fired|was not fired|didn't fire|did not fire|failed silently)\b/i.test(trimmed)
+    || /\bno\s+[`'"]?image[_ -]?generation[_ -]?result[`'"]?\b/i.test(trimmed)
+    || /\bthere\s+is\s+no\s+[`'"]?image[_ -]?generation[_ -]?result[`'"]?\b/i.test(trimmed)
+    || /\bno result was returned to me\b/i.test(trimmed)
     || /\bimage lane\b[\s\S]{0,80}\b(didn't|did not|wasn't|was not|failed|nothing|no result|no output)\b/i.test(trimmed)
+    || /\bimage generation lane\b[\s\S]{0,120}\b(no result|no output|produced no output|returned nothing)\b/i.test(trimmed)
     || /\bgeneration backend\b[\s\S]{0,80}\b(isn't connecting|is not connecting|failing silently|didn't return|did not return)\b/i.test(trimmed)
   if (trimmed && !contradictsImageSuccess) return trimmed
   return 'I made it. The image is generated and will be attached right after this message.'
@@ -1185,6 +1265,10 @@ function repairKaiVisionText(text: string | null, vision: KaiVisionResult): stri
   if (!vision.attempted || !vision.ok || vision.summaries.length === 0) return text
   const trimmed = String(text || '').trim()
   const contradictsVisionSuccess = /\b(no vision result|vision runner didn't return|vision runner did not return|vision lane either wasn't fired|vision lane either was not fired|vision lane failed silently|don't have the ocr|do not have the ocr|can't actually see|cannot actually see|can't read the image|cannot read the image|i'?m not going to guess)\b/i.test(trimmed)
+    || /\bno\s+[`'"]?vision[_ -]?result[`'"]?\b/i.test(trimmed)
+    || /\bno\s+[`'"]?vision[_ -]?summaries[`'"]?\b/i.test(trimmed)
+    || /\bno result was returned to me\b/i.test(trimmed)
+    || /\bvision\/ocr lane\b[\s\S]{0,120}\b(no result|no output|returned nothing|failed silently)\b/i.test(trimmed)
   if (trimmed && !contradictsVisionSuccess) return trimmed
   const summary = vision.summaries
     .map(item => String(item.summary || '').trim())
@@ -1837,8 +1921,8 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
     }),
     safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
     safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
-    safeKaiMindTool(env, 'hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
-    safeKaiMindTool(env, 'recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'kaisoryth_hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
+    safeKaiMindTool(env, 'kaisoryth_recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
   ])
 
   return {
@@ -1880,8 +1964,8 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
     }),
     safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
     safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
-    safeKaiMindTool(env, 'hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
-    safeKaiMindTool(env, 'recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'kaisoryth_hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
+    safeKaiMindTool(env, 'kaisoryth_recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
     safeKaiMindTool(env, 'canonical_memory_search', 'nesteq_search', { query: canonQuery, n_results: 8 }),
     safeKaiMindTool(env, 'chat_memory_search', 'nestchat_search', { query: canonQuery, limit: 5 }),
     safeKaiMindTool(env, 'available_skills', 'nesteq_skill_list', { format: 'text' }, 5000),

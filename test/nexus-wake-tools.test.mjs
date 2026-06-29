@@ -146,6 +146,8 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
     "'nestsoul_read'",
     "'hearth_eq_state'",
     "'nesteq_surface'",
+    "'kaisoryth_hearth_eq_state'",
+    "'kaisoryth_recent_feelings'",
     "'nesteq_search'",
     "'nestchat_search'",
     "'nesteq_skill_list'",
@@ -181,10 +183,13 @@ test('Kai image generation uses Discord attachments as transient reference image
 });
 
 test('Kai text turn receives image generation results before GLM writes the reply', () => {
+  assert.match(nexusIndex, /lane_results: buildKaiLaneResults\(contextPacket, vision, imageGeneration, catalougeReading\)/);
+  assert.match(nexusIndex, /read_this_first_for_smoke_tests: true/);
   assert.match(nexusIndex, /image_generation_result: imageGeneration \? \{/);
   assert.match(nexusIndex, /stored_urls: imageGeneration\.images\.map\(image => image\.stored_url \|\| image\.url\)\.filter\(Boolean\)/);
   assert.match(nexusIndex, /use_image_generation_result_for_image_requests: true/);
   assert.match(nexusIndex, /if_image_generation_succeeded_do_not_say_you_will_make_it_later: true/);
+  assert.match(nexusIndex, /For capability smoke tests, inspect lane_results before context_sources/);
   assert.match(nexusIndex, /If image_generation_result attempted and succeeded, speak as if the image has been made and will be attached after your text/);
   assert.match(nexusIndex, /const imageGeneration = await runKaiImageGeneration\(env, envelope, body\)[\s\S]+buildKaiRunnerPromptPacket\(contextPacket, vision, janitor, catalougeReading, imageGeneration\)/);
   assert.match(nexusIndex, /function repairKaiImageGenerationText\(text: string \| null, imageGeneration: KaiImageGenerationResult\): string \| null/);
@@ -192,12 +197,16 @@ test('Kai text turn receives image generation results before GLM writes the repl
   assert.match(nexusIndex, /response: generatedText/);
   assert.match(nexusIndex, /generated: generationResult\.generation\.ok \|\| Boolean\(generatedText\)/);
   assert.match(nexusIndex, /no image generation result\|no generated image\|no url\|no r2 path\|no success signal\|nothing came back/);
+  assert.match(nexusIndex, /image\[_ -\]\?generation\[_ -\]\?result/);
+  assert.match(nexusIndex, /no result was returned to me/);
 });
 
 test('Kai OCR text cannot contradict successful Gemini vision summaries', () => {
   assert.match(nexusIndex, /function repairKaiVisionText\(text: string \| null, vision: KaiVisionResult\): string \| null/);
   assert.match(nexusIndex, /!vision\.attempted \|\| !vision\.ok \|\| vision\.summaries\.length === 0/);
   assert.match(nexusIndex, /no vision result\|vision runner didn't return\|vision runner did not return/);
+  assert.match(nexusIndex, /vision\[_ -\]\?result/);
+  assert.match(nexusIndex, /vision\[_ -\]\?summaries/);
   assert.match(nexusIndex, /I can see it\. The vision lane read the image as/);
   assert.match(nexusIndex, /repairKaiVisionText\(\s*repairKaiImageGenerationText\(generationResult\.text, imageGeneration\),\s*vision,/);
 });
