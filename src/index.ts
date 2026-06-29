@@ -720,6 +720,7 @@ function buildKaiLaneResults(
       companion: 'kaisoryth',
       loaded: recentFeelings !== undefined,
       error: laneEntryError(recentFeelings),
+      result: recentFeelings === undefined ? null : mcpJsonValue(recentFeelings),
       preview: laneTextPreview(recentFeelings),
     },
     catalouge: catalougeReading?.attempted ? {
@@ -1113,9 +1114,9 @@ function buildKaiRunnerPromptPacket(
       mentions: contextPacket.envelope.mentions || [],
       attachments: contextPacket.envelope.attachments,
     },
+    lane_results: buildKaiLaneResults(contextPacket, vision, imageGeneration, catalougeReading),
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
-    lane_results: buildKaiLaneResults(contextPacket, vision, imageGeneration, catalougeReading),
     vision_result: vision ? {
       attempted: vision.attempted,
       enabled: vision.enabled,

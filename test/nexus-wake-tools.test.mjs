@@ -185,6 +185,12 @@ test('Kai image generation uses Discord attachments as transient reference image
 test('Kai text turn receives image generation results before GLM writes the reply', () => {
   assert.match(nexusIndex, /lane_results: buildKaiLaneResults\(contextPacket, vision, imageGeneration, catalougeReading\)/);
   assert.match(nexusIndex, /read_this_first_for_smoke_tests: true/);
+  assert.ok(
+    nexusIndex.indexOf('lane_results: buildKaiLaneResults(contextPacket, vision, imageGeneration, catalougeReading)') <
+      nexusIndex.indexOf('context_sources: contextPacket.context_sources'),
+    'lane_results must be serialized before bulky context_sources/context so it survives compactJson truncation',
+  );
+  assert.match(nexusIndex, /result: recentFeelings === undefined \? null : mcpJsonValue\(recentFeelings\)/);
   assert.match(nexusIndex, /image_generation_result: imageGeneration \? \{/);
   assert.match(nexusIndex, /stored_urls: imageGeneration\.images\.map\(image => image\.stored_url \|\| image\.url\)\.filter\(Boolean\)/);
   assert.match(nexusIndex, /use_image_generation_result_for_image_requests: true/);
