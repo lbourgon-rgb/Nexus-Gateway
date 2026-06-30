@@ -95,7 +95,7 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
     include_metabolized: z.boolean().optional().default(false),
     limit: z.number().optional().default(10),
   }, async (args) => {
-    return serythraeMcp(env, 'nesteq_surface', args)
+    return serythraeMcp(env, 'nesteq_recent_feelings', args)
   })
 
   server.tool('kaisoryth_memory_search', 'Search Kai/NESTeq memories and feelings by semantic similarity.', {
@@ -110,7 +110,7 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
     limit: z.number().optional().default(10),
     include_metabolized: z.boolean().optional().default(false),
   }, async (args) => {
-    return serythraeMcp(env, 'nesteq_surface', args)
+    return serythraeMcp(env, 'nesteq_recent_feelings', args)
   })
 
   server.tool('kaisoryth_identity_read', 'Read Kai identity anchors from NESTeq.', {
@@ -119,10 +119,15 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
     return serythraeMcp(env, 'nesteq_identity_read', args)
   })
 
-  server.tool('kaisoryth_hearth_eq_state', 'Read Kai Hearth EQ axis state and recent EQ log.', {
+  server.tool('kaisoryth_eq_state', 'Read Kai private NESTeq EQ axis state and recent EQ log.', {
     format: z.enum(['text', 'json']).optional().default('json'),
   }, async (args) => {
-    return serythraeMcp(env, 'hearth_eq_state', { ...args, companion: KAI_ONLY })
+    return serythraeMcp(env, 'nesteq_eq_state', args)
+  })
+
+  server.tool('kaisoryth_last_write', 'Read the latest durable Kai/NESTeq write.', {
+  }, async () => {
+    return serythraeMcp(env, 'nesteq_last_write', {})
   })
 
   server.tool('kaisoryth_feel', 'Log a Kai/NESTeq feeling or observation through the ADE pipeline.', {

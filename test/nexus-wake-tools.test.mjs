@@ -154,17 +154,23 @@ test('Nexus hallway forwards Kai runner traffic to Serythrae with rollback avail
 
 test('Kai runner context loads identity, soul, skills, and canon search before composition', () => {
   assert.doesNotMatch(nexusIndex, /thalamus_surface/);
-  assert.match(nexusIndex, /safeKaiMindTool\(env, 'surface', 'nesteq_surface', \{ include_metabolized: false, limit: 10 \}\)/);
+  assert.doesNotMatch(nexusIndex, /hearth_eq_state/);
+  assert.doesNotMatch(nexusIndex, /kaisoryth_hearth_eq_state/);
+  assert.doesNotMatch(nexusIndex, /nestchat_search/);
+  assert.match(nexusIndex, /safeKaiMindTool\(env, 'nesteq_surface', 'nesteq_recent_feelings', \{ include_metabolized: false, limit: 10 \}\)/);
   assert.match(nexusIndex, /safeKaiMindTool\(env, 'identity_memory_search', 'nesteq_search'/);
   for (const expected of [
     "'nesteq_identity'",
     "'nestsoul_read'",
-    "'hearth_eq_state'",
-    "'nesteq_surface'",
-    "'kaisoryth_hearth_eq_state'",
+    "'nesteq_eq_state'",
+    "'nesteq_recent_feelings'",
+    "'nesteq_last_write'",
+    "'kaisoryth_eq_state'",
     "'kaisoryth_recent_feelings'",
+    "'kaisoryth_last_write'",
+    "'kaisoryth_nestsoul_read'",
+    "'kaisoryth_nestknow_landscape'",
     "'nesteq_search'",
-    "'nestchat_search'",
     "'nesteq_skill_list'",
     "'nesteq_skill_load'",
     "'intimacy'",
@@ -175,6 +181,10 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
   ]) {
     assert.ok(nexusIndex.includes(expected), `missing ${expected}`);
   }
+  assert.ok(
+    nexusIndex.indexOf('kaisoryth_nestknow_landscape: {') < nexusIndex.indexOf('kaisoryth_nestsoul_read: {'),
+    'NestKnow lane result must be serialized before bulky NESTSoul content',
+  );
 });
 
 test('Kai image generation uses Discord attachments as transient reference images', () => {
@@ -246,9 +256,12 @@ test('Kai vision OCR proxies Discord images and keeps Gemini Flash as the defaul
 
 test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway retirement', () => {
   assert.doesNotMatch(serythraeTools, /thalamus_surface|thalamus_emotional_pulse|thalamus_dream|kaisoryth_thalamus/);
+  assert.doesNotMatch(serythraeTools, /hearth_eq_state|kaisoryth_hearth_eq_state/);
   assert.doesNotMatch(serythraeTools, /companion_id:\s*z\./);
-  assert.match(serythraeTools, /kaisoryth_context_surface[\s\S]+nesteq_surface/);
-  assert.match(serythraeTools, /kaisoryth_recent_feelings[\s\S]+nesteq_surface/);
+  assert.match(serythraeTools, /kaisoryth_context_surface[\s\S]+nesteq_recent_feelings/);
+  assert.match(serythraeTools, /kaisoryth_recent_feelings[\s\S]+nesteq_recent_feelings/);
+  assert.match(serythraeTools, /kaisoryth_eq_state[\s\S]+nesteq_eq_state/);
+  assert.match(serythraeTools, /kaisoryth_last_write[\s\S]+nesteq_last_write/);
   for (const toolName of [
     'kaisoryth_orient',
     'kaisoryth_context_surface',
@@ -271,7 +284,8 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
     'kaisoryth_nestknow_landscape',
     'kaisoryth_type_snapshot',
     'kaisoryth_consolidate',
-    'kaisoryth_hearth_eq_state',
+    'kaisoryth_eq_state',
+    'kaisoryth_last_write',
     'kaisoryth_workspace_status',
     'kaisoryth_workspace_list',
     'kaisoryth_workspace_read',

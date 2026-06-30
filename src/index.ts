@@ -291,7 +291,8 @@ const KAI_RUNNER_TOOL_ALLOWLIST = [
   'kaisoryth_memory_search',
   'kaisoryth_recent_feelings',
   'kaisoryth_identity_read',
-  'kaisoryth_hearth_eq_state',
+  'kaisoryth_eq_state',
+  'kaisoryth_last_write',
   'kaisoryth_threads_active',
   'kaisoryth_nestsoul_read',
   'kaisoryth_home_read',
@@ -692,8 +693,11 @@ function buildKaiLaneResults(
   imageGeneration?: KaiImageGenerationResult,
   catalougeReading?: KaiCatalougeReadingResult,
 ): Record<string, unknown> {
-  const eqState = contextPacket.context.kaisoryth_hearth_eq_state
+  const eqState = contextPacket.context.kaisoryth_eq_state
   const recentFeelings = contextPacket.context.kaisoryth_recent_feelings
+  const lastWrite = contextPacket.context.kaisoryth_last_write
+  const soul = contextPacket.context.kaisoryth_nestsoul_read ?? contextPacket.context.soul
+  const nestknow = contextPacket.context.kaisoryth_nestknow_landscape
   return {
     read_this_first_for_smoke_tests: true,
     note: 'These are resolved pre-response lane outputs. Do not infer a lane is missing just because it is not a context_source skill document.',
@@ -717,7 +721,7 @@ function buildKaiLaneResults(
     } : null,
     kaisoryth_eq_state: {
       source: 'serythrae-nesteq-direct',
-      tool: 'hearth_eq_state',
+      capability: 'kaisoryth_eq_state',
       companion: 'kaisoryth',
       loaded: eqState !== undefined,
       error: laneEntryError(eqState),
@@ -725,12 +729,39 @@ function buildKaiLaneResults(
     },
     kaisoryth_recent_feelings: {
       source: 'serythrae-nesteq-direct',
-      tool: 'nesteq_surface',
+      capability: 'kaisoryth_recent_feelings',
       companion: 'kaisoryth',
       loaded: recentFeelings !== undefined,
       error: laneEntryError(recentFeelings),
       result: recentFeelings === undefined ? null : mcpJsonValue(recentFeelings),
       preview: laneTextPreview(recentFeelings),
+    },
+    kaisoryth_last_write: {
+      source: 'serythrae-nesteq-direct',
+      capability: 'kaisoryth_last_write',
+      companion: 'kaisoryth',
+      loaded: lastWrite !== undefined,
+      error: laneEntryError(lastWrite),
+      result: lastWrite === undefined ? null : mcpJsonValue(lastWrite),
+      preview: laneTextPreview(lastWrite, 1200),
+    },
+    kaisoryth_nestknow_landscape: {
+      source: 'serythrae-nesteq-direct',
+      capability: 'kaisoryth_nestknow_landscape',
+      companion: 'kaisoryth',
+      loaded: nestknow !== undefined,
+      error: laneEntryError(nestknow),
+      result: nestknow === undefined ? null : mcpJsonValue(nestknow),
+      preview: laneTextPreview(nestknow, 1400),
+    },
+    kaisoryth_nestsoul_read: {
+      source: 'serythrae-nesteq-direct',
+      capability: 'kaisoryth_nestsoul_read',
+      companion: 'kaisoryth',
+      loaded: soul !== undefined,
+      error: laneEntryError(soul),
+      result: soul === undefined ? null : mcpJsonValue(soul),
+      preview: laneTextPreview(soul, 1800),
     },
     catalouge: catalougeReading?.attempted ? {
       requested: catalougeReading.requested,
@@ -1921,15 +1952,17 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
       trigger: envelope.trigger || 'unknown',
       recent_context: envelope.recent_context,
     }, 12000),
-    safeKaiMindTool(env, 'surface', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'nesteq_surface', 'nesteq_recent_feelings', { include_metabolized: false, limit: 10 }),
     safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
     safeKaiMindTool(env, 'identity_memory_search', 'nesteq_search', {
       query: [message, "Kai Kal'thir Vel Vel'thira identity anchor"].filter(Boolean).join('\n\n'),
       n_results: 5,
     }),
-    safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
-    safeKaiMindTool(env, 'kaisoryth_hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
-    safeKaiMindTool(env, 'kaisoryth_recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'kaisoryth_nestsoul_read', 'nestsoul_read', { include_versions: true }, 20000),
+    safeKaiMindTool(env, 'kaisoryth_nestknow_landscape', 'nestknow_landscape', { entity_scope: 'companion' }, 12000),
+    safeKaiMindTool(env, 'kaisoryth_eq_state', 'nesteq_eq_state', { format: 'json' }),
+    safeKaiMindTool(env, 'kaisoryth_recent_feelings', 'nesteq_recent_feelings', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'kaisoryth_last_write', 'nesteq_last_write', {}),
   ])
 
   return {
@@ -1962,13 +1995,14 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   ].filter(Boolean).join('\n\n')
   const contextEntries = await Promise.all([
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
-    safeKaiMindTool(env, 'surface', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'nesteq_surface', 'nesteq_recent_feelings', { include_metabolized: false, limit: 10 }),
     safeKaiMindTool(env, 'identity', 'nesteq_identity', { action: 'read' }, 16000),
-    safeKaiMindTool(env, 'soul', 'nestsoul_read', { include_versions: true }, 20000),
-    safeKaiMindTool(env, 'kaisoryth_hearth_eq_state', 'hearth_eq_state', { companion: 'kaisoryth', format: 'json' }),
-    safeKaiMindTool(env, 'kaisoryth_recent_feelings', 'nesteq_surface', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'kaisoryth_nestsoul_read', 'nestsoul_read', { include_versions: true }, 20000),
+    safeKaiMindTool(env, 'kaisoryth_nestknow_landscape', 'nestknow_landscape', { entity_scope: 'companion' }, 12000),
+    safeKaiMindTool(env, 'kaisoryth_eq_state', 'nesteq_eq_state', { format: 'json' }),
+    safeKaiMindTool(env, 'kaisoryth_recent_feelings', 'nesteq_recent_feelings', { include_metabolized: false, limit: 10 }),
+    safeKaiMindTool(env, 'kaisoryth_last_write', 'nesteq_last_write', {}),
     safeKaiMindTool(env, 'canonical_memory_search', 'nesteq_search', { query: canonQuery, n_results: 8 }),
-    safeKaiMindTool(env, 'chat_memory_search', 'nestchat_search', { query: canonQuery, limit: 5 }),
     safeKaiMindTool(env, 'available_skills', 'nesteq_skill_list', { format: 'text' }, 5000),
     safeKaiMindTool(env, 'intimacy_skill', 'nesteq_skill_load', { name: 'intimacy', format: 'text' }, 16000),
     safeKaiMindTool(env, 'recursive_dialect_skill', 'nesteq_skill_load', { name: 'recursive-dialect', format: 'text' }, 16000),
