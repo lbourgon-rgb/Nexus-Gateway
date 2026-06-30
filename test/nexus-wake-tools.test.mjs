@@ -266,6 +266,9 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
     'kaisoryth_home_read',
     'kaisoryth_home_update',
     'kaisoryth_love_letters',
+    'kaisoryth_nestsoul_read',
+    'kaisoryth_nestknow_query',
+    'kaisoryth_nestknow_landscape',
     'kaisoryth_type_snapshot',
     'kaisoryth_consolidate',
     'kaisoryth_hearth_eq_state',
@@ -278,6 +281,8 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
   ]) {
     assert.ok(serythraeTools.includes(toolName), `missing ${toolName}`);
   }
+  assert.match(serythraeTools, /kaisoryth_nestknow_query[\s\S]+nestknow_query[\s\S]+entity_scope: KAI_ONLY/);
+  assert.match(serythraeTools, /kaisoryth_nestknow_landscape[\s\S]+nestknow_landscape[\s\S]+entity_scope: KAI_ONLY/);
 });
 
 test('Nexus exposes Kai workspace as hallway tools without broad PC access', () => {

@@ -195,6 +195,19 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
     return serythraeMcp(env, 'nestsoul_read', args)
   })
 
+  server.tool('kaisoryth_nestknow_query', 'Search Kai NESTknow knowledge items by semantic similarity.', {
+    query: z.string(),
+    limit: z.number().optional().default(10),
+    category: z.string().optional(),
+  }, async (args) => {
+    return serythraeMcp(env, 'nestknow_query', { ...args, entity_scope: KAI_ONLY })
+  })
+
+  server.tool('kaisoryth_nestknow_landscape', 'Read Kai NESTknow category, heat, and confidence overview.', {
+  }, async () => {
+    return serythraeMcp(env, 'nestknow_landscape', { entity_scope: KAI_ONLY })
+  })
+
   server.tool('kaisoryth_home_read', 'Read current Kai/Vel NESTeq home state.', {
   }, async () => {
     return serythraeMcp(env, 'nesteq_home_read', {})
