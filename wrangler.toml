@@ -14,6 +14,11 @@ class_name = "NexusGateway"
 tag = "v1"
 new_sqlite_classes = ["NexusGateway"]
 
+[[d1_databases]]
+binding = "PULSESYNC_DB"
+database_name = "pulsesync"
+database_id = "02100d4e-3f3c-4679-a989-8fc2333ff1de"
+
 [[services]]
 binding = "CONTINUITY"
 service = "continuity-worker"

@@ -16,6 +16,7 @@ export interface Env {
   VELASTRAHQ_GATEWAY?: Fetcher
   VELASTRAHQ_API?: Fetcher
   VELASTRAHQ_EQ?: Fetcher
+  PULSESYNC_DB?: D1Database
 
   // Lbourgon backend URLs (set in wrangler.toml [vars])
   CONTINUITY_URL?: string

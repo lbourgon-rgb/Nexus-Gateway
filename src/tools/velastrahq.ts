@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../env'
 import { proxyMcp, proxyRest } from '../proxy'
 import { requireCompanionId } from '../identity'
+import { buildVelPreflightContext, VEL_AUTHOR_VERIFICATIONS } from '../vel-preflight'
 
 function requireMorzar(companionInput: unknown) {
   const companionId = requireCompanionId(companionInput)
@@ -40,6 +41,15 @@ async function morzarEqWithGatewayFallback(
 }
 
 export function registerVelastraHQTools(server: McpServer, env: Env) {
+  server.tool('vel_preflight_context', "Read a compact PulseSync pacing context only after the caller has verified Vel's authorship.", {
+    author_is_vel: z.boolean(),
+    verification: z.enum([...VEL_AUTHOR_VERIFICATIONS, 'unverified']),
+    surface: z.string(),
+    include_cycle: z.boolean().optional().default(false),
+  }, async (args) => ({
+    content: [{ type: 'text' as const, text: JSON.stringify(await buildVelPreflightContext(env, args), null, 2) }],
+  }))
+
   server.tool('velastrahq_status', 'Read VelastraHQ gateway health.', {}, async () => {
     return proxyRest(env.VELASTRAHQ_GATEWAY_URL ? `${env.VELASTRAHQ_GATEWAY_URL}/health` : undefined, {}, 'GET', {}, env.VELASTRAHQ_GATEWAY)
   })

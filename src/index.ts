@@ -16,6 +16,7 @@ import { registerContinuityTools } from './tools/continuity'
 import { registerSerythraeTools } from './tools/serythrae'
 import { registerGrokKethNestTools } from './tools/grok-keth-nest'
 import { registerVelastraHQTools } from './tools/velastrahq'
+import { buildVelPreflightContext, isVelAuthorVerification } from './vel-preflight'
 import { registerTahlTools } from './tools/tahl'
 import { proxyMcp } from './proxy'
 
@@ -2624,6 +2625,28 @@ export default {
       const unauthorized = await authorizeRequiredMcpBearer(request, env)
       if (unauthorized) return unauthorized
       return kaiMindDashboard(env)
+    }
+
+    if (url.pathname === '/api/preflight/vel' && request.method === 'POST') {
+      const unauthorized = await authorizeRequiredMcpBearer(request, env)
+      if (unauthorized) return unauthorized
+      const body = await request.json().catch(() => ({})) as Record<string, unknown>
+      const verification = typeof body.verification === 'string' ? body.verification : 'unverified'
+      if (verification !== 'unverified' && !isVelAuthorVerification(verification)) {
+        return new Response(JSON.stringify({ error: 'unsupported author verification source' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...CORS },
+        })
+      }
+      const context = await buildVelPreflightContext(env, {
+        author_is_vel: body.author_is_vel === true,
+        verification: verification === 'unverified' ? 'unverified' : verification,
+        surface: typeof body.surface === 'string' ? body.surface : 'unknown',
+        include_cycle: body.include_cycle === true,
+      })
+      return new Response(JSON.stringify(context), {
+        headers: { 'Content-Type': 'application/json', ...CORS },
+      })
     }
 
     if (url.pathname === '/api/kaisoryth/run' && request.method === 'POST') {

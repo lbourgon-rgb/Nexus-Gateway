@@ -13,6 +13,7 @@ const grokKethNestTools = readFileSync(new URL('../src/tools/grok-keth-nest.ts',
 const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 const nexusIndex = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 const rotationDoc = readFileSync(new URL('../docs/mcp-api-key-rotation.md', import.meta.url), 'utf8');
+const velPreflight = readFileSync(new URL('../src/vel-preflight.ts', import.meta.url), 'utf8');
 
 test('Nexus exposes runner-facing Continuity wake tools', () => {
   for (const toolName of [
@@ -24,6 +25,18 @@ test('Nexus exposes runner-facing Continuity wake tools', () => {
   ]) {
     assert.ok(continuityTools.includes(toolName), `missing ${toolName}`);
   }
+});
+
+test('PulseSync preflight is author-scoped, compact, and privately bound', () => {
+  assert.match(envSource, /PULSESYNC_DB\?: D1Database/);
+  assert.match(wrangler, /binding = "PULSESYNC_DB"/);
+  assert.match(velastraTools, /vel_preflight_context/);
+  assert.match(nexusIndex, /\/api\/preflight\/vel/);
+  assert.match(nexusIndex, /authorizeRequiredMcpBearer/);
+  assert.match(velPreflight, /if \(!verified\)/);
+  assert.match(velPreflight, /author_not_verified_vel/);
+  assert.match(velPreflight, /raw_values_included: false/);
+  assert.doesNotMatch(velPreflight, /heartRate|oxygenSaturation|restingHeartRate/);
 });
 
 test('Nexus wake tools route to Continuity wake endpoints', () => {
