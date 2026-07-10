@@ -2091,6 +2091,12 @@ async function forwardKaiRunnerToSerythrae(request: Request, env: Env): Promise<
 }
 
 async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
+  // Authenticate the original caller before choosing the local or forwarded
+  // runner. Service-binding forwards are trusted by Serythrae, so delaying this
+  // check until kaiRunnerRunLocal would leave the production forward route open.
+  const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeMcpBearer(request, env)
+  if (unauthorized) return unauthorized
+
   if (kaiRunnerRoute(env) === 'serythrae') {
     try {
       const forwarded = await forwardKaiRunnerToSerythrae(request, env)

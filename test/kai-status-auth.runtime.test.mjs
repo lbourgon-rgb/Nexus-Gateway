@@ -97,12 +97,13 @@ function runtime(bundlePath, { current, next } = {}) {
           ...(next ? { MCP_API_KEY_NEXT: next } : {}),
           SERYTHRAE_MIND_API_KEY: 'fixture-mind-key',
           KAI_RUNNER_ENABLED: 'true',
-          KAI_RUNNER_ROUTE: 'nexus',
+          KAI_RUNNER_ROUTE: 'serythrae',
         },
         serviceBindings: {
           ARCHIVE: 'backend-mock',
           CATALOUGE: 'backend-mock',
           SERYTHRAE_MIND: 'backend-mock',
+          SERYTHRAE_GATEWAY: 'backend-mock',
         },
       },
       {
@@ -304,7 +305,7 @@ test('MCP and SSE transports fail closed for missing, wrong, and unconfigured cr
   }
 });
 
-test('optional Kai runner auth accepts either configured key and preserves no-key and internal bypass semantics', async () => {
+test('production Serythrae-forwarded Kai runner auth accepts either configured key and preserves no-key and internal bypass semantics', async () => {
   const init = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -316,6 +317,16 @@ test('optional Kai runner auth accepts either configured key and preserves no-ke
     authorization: `Bearer ${CURRENT_API_KEY}`,
   })).status, 401, 'next-only runner rejects inactive current key');
 
+  for (const [name, worker] of [['old-only', oldOnly], ['next-only', nextOnly], ['both', both]]) {
+    for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
+      assert.equal((await request(worker, route, init)).status, 401, `${name} ${route} rejects missing bearer`);
+      assert.equal((await request(worker, route, {
+        ...init,
+        authorization: `Bearer ${WRONG_API_KEY}`,
+      })).status, 401, `${name} ${route} rejects wrong bearer`);
+    }
+  }
+
   for (const [name, worker, authorization, baseUrl] of [
     ['next-only external', nextOnly, `Bearer ${NEXT_API_KEY}`, 'https://nexus.test'],
     ['both external current', both, `Bearer ${CURRENT_API_KEY}`, 'https://nexus.test'],
@@ -325,6 +336,20 @@ test('optional Kai runner auth accepts either configured key and preserves no-ke
   ]) {
     const response = await request(worker, '/api/kaisoryth/run', { ...init, authorization, baseUrl });
     assert.notEqual(response.status, 401, `${name} should pass optional auth`);
+    assert.notEqual(response.status, 503, `${name} should not require missing auth configuration`);
+    assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
+    assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
+  }
+
+  for (const [name, worker, authorization] of [
+    ['old-only preview', oldOnly, `Bearer ${CURRENT_API_KEY}`],
+    ['next-only preview', nextOnly, `Bearer ${NEXT_API_KEY}`],
+    ['both preview current', both, `Bearer ${CURRENT_API_KEY}`],
+    ['both preview next', both, `Bearer ${NEXT_API_KEY}`],
+    ['no-key preview', missingConfig, undefined],
+  ]) {
+    const response = await request(worker, '/api/kaisoryth/runner-preview', { ...init, authorization });
+    assert.notEqual(response.status, 401, `${name} should pass forwarded runner auth`);
     assert.notEqual(response.status, 503, `${name} should not require missing auth configuration`);
     assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
     assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
