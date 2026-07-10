@@ -187,7 +187,8 @@ test('Nexus owns Kai runner traffic and rollback stays inside Nexus', () => {
   assert.doesNotMatch(envSource, /KAI_RUNNER_ROUTE\?: string/);
   assert.doesNotMatch(envSource, /KAI_RUNNER_FORWARD_FALLBACK\?: string/);
   assert.match(wrangler, /KAI_TEXT_MODEL = "z-ai\/glm-5\.2"/);
-  assert.match(wrangler, /KAI_TEXT_PROVIDER_ORDER = "deepinfra"/);
+  assert.match(wrangler, /KAI_TEXT_PROVIDER_ORDER = "z-ai,streamlake,novita,deepinfra"/);
+  assert.match(nexusIndex, /KAI_TEXT_PROVIDER_ORDER, 'z-ai,streamlake,novita,deepinfra'/);
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS = "false"/);
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS = "true"/);
   assert.match(wrangler, /KAI_RUNNER_TOOL_LOOP_ENABLED = "true"/);

@@ -488,7 +488,7 @@ function envProviderEnabled(value: unknown): boolean {
 }
 
 function kaiTextProviderPreferences(env: Env): Record<string, unknown> {
-  const order = csvStringList(envText(env.KAI_TEXT_PROVIDER_ORDER, 'deepinfra'))
+  const order = csvStringList(envText(env.KAI_TEXT_PROVIDER_ORDER, 'z-ai,streamlake,novita,deepinfra'))
   const ignore = csvStringList(envText(env.KAI_TEXT_PROVIDER_IGNORE, 'morph'))
   return {
     ...(order.length ? { order } : {}),
@@ -1490,6 +1490,7 @@ async function callOpenRouterToolTurnOnce(
   const first = recordValue(choices[0])
   const message = recordValue(first.message)
   const finishReason = typeof first.finish_reason === 'string' ? first.finish_reason : null
+  const endpointProvider = stringValue(record.provider)
   const refusal = typeof message.refusal === 'string' ? message.refusal.trim().slice(0, 500) : ''
   const messageKeys = Object.keys(message).sort()
   const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
@@ -1513,6 +1514,7 @@ async function callOpenRouterToolTurnOnce(
     content: openRouterMessageContent(message.content),
     tool_calls: toolCalls,
     finish_reason: finishReason,
+    ...(endpointProvider ? { endpoint_provider: endpointProvider } : {}),
     ...(refusal ? { refusal } : {}),
     message_keys: messageKeys,
     ...(Array.isArray(message.reasoning_details) ? { reasoning_details: message.reasoning_details } : {}),
@@ -1585,6 +1587,7 @@ async function callOpenRouterToolTurn(
     const unusable = unusableKaiModelTurnReason(turn)
     diagnostics.push({
       finish_reason: turn.finish_reason || null,
+      ...(turn.endpoint_provider ? { endpoint_provider: turn.endpoint_provider } : {}),
       ...(turn.refusal ? { refusal: turn.refusal } : {}),
       message_keys: turn.message_keys || [],
       ...(unusable ? { error: unusable } : {}),

@@ -72,7 +72,7 @@ test('two-turn read-only canary executes one tool and returns grounded final pro
         ? {
             ...modelToolCall('continuity_current_thread', { limit: 4 }),
             reasoning_details: [{ type: 'reasoning.text', text: 'fixture private reasoning' }],
-            diagnostics: [{ finish_reason: 'tool_calls', message_keys: ['reasoning_details', 'tool_calls'] }],
+            diagnostics: [{ finish_reason: 'tool_calls', endpoint_provider: 'Z.AI', message_keys: ['reasoning_details', 'tool_calls'] }],
           }
         : { content: 'I checked this thread and found the current context.', tool_calls: [] };
     },
@@ -92,6 +92,7 @@ test('two-turn read-only canary executes one tool and returns grounded final pro
   assert.equal(result.receipts.length, 1);
   assert.equal(result.receipts[0].status, 'executed');
   assert.equal(result.receipts[0].access, 'read');
+  assert.equal(result.model_diagnostics[0].endpoint_provider, 'Z.AI');
   assert.ok(turns[1].messages.some((message) => message.role === 'tool'));
   const assistantTurn = turns[1].messages.find((message) => message.role === 'assistant');
   assert.deepEqual(assistantTurn.reasoning_details, [{ type: 'reasoning.text', text: 'fixture private reasoning' }]);

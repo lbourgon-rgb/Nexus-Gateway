@@ -33,6 +33,7 @@ export interface KaiRunnerModelTurn {
   content: string | null
   tool_calls: KaiRunnerModelToolCall[]
   finish_reason?: string | null
+  endpoint_provider?: string
   refusal?: string
   message_keys?: string[]
   reasoning?: string
@@ -43,6 +44,7 @@ export interface KaiRunnerModelTurn {
 
 export interface KaiRunnerModelDiagnostic {
   finish_reason: string | null
+  endpoint_provider?: string
   refusal?: string
   message_keys: string[]
   error?: string
