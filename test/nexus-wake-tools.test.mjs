@@ -27,14 +27,19 @@ test('Nexus exposes runner-facing Continuity wake tools', () => {
   }
 });
 
-test('PulseSync preflight is author-scoped, compact, and privately bound', () => {
+test('PulseSync preflight is server-authorized, compact, and privately bound', () => {
   assert.match(envSource, /PULSESYNC_DB\?: D1Database/);
   assert.match(wrangler, /binding = "PULSESYNC_DB"/);
-  assert.match(velastraTools, /vel_preflight_context/);
-  assert.match(nexusIndex, /\/api\/preflight\/vel/);
-  assert.match(nexusIndex, /authorizeRequiredMcpBearer/);
-  assert.match(velPreflight, /if \(!verified\)/);
-  assert.match(velPreflight, /author_not_verified_vel/);
+  assert.doesNotMatch(velastraTools, /vel_preflight_context/);
+  assert.match(envSource, /VEL_PREFLIGHT_DISCORD_API_KEY\?: string/);
+  assert.match(envSource, /VEL_PREFLIGHT_CODEX_API_KEY\?: string/);
+  assert.match(nexusIndex, /if \(url\.pathname === '\/api\/preflight\/vel'[\s\S]{0,160}authorizeVelPreflightCaller/);
+  assert.match(nexusIndex, /verification: caller/);
+  assert.doesNotMatch(nexusIndex, /author_is_vel: body\.author_is_vel/);
+  assert.match(velPreflight, /caller_not_authorized_for_vel_preflight/);
+  assert.match(velPreflight, /ROW_NUMBER\(\) OVER/);
+  assert.match(velPreflight, /PARTITION BY type/);
+  assert.doesNotMatch(velPreflight, /LIMIT 24/);
   assert.match(velPreflight, /raw_values_included: false/);
   assert.doesNotMatch(velPreflight, /heartRate|oxygenSaturation|restingHeartRate/);
 });

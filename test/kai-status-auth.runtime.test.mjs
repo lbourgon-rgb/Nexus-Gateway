@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
 const CURRENT_API_KEY = 'fixture-current-mcp-api-key';
 const NEXT_API_KEY = 'fixture-next-mcp-api-key';
 const WRONG_API_KEY = 'fixture-wrong-mcp-api-key';
+const VEL_PREFLIGHT_DISCORD_API_KEY = 'fixture-vel-preflight-discord-key';
 const PRIVATE_ROUTES = [
   '/api/kaisoryth/context',
   '/api/kaisoryth/brain-status',
@@ -81,7 +82,7 @@ let nextOnly;
 let both;
 let missingConfig;
 
-function runtime(bundlePath, { current, next } = {}) {
+function runtime(bundlePath, { current, next, preflightDiscord } = {}) {
   return new Miniflare({
     workers: [
       {
@@ -95,6 +96,7 @@ function runtime(bundlePath, { current, next } = {}) {
         bindings: {
           ...(current ? { MCP_API_KEY: current } : {}),
           ...(next ? { MCP_API_KEY_NEXT: next } : {}),
+          ...(preflightDiscord ? { VEL_PREFLIGHT_DISCORD_API_KEY: preflightDiscord } : {}),
           SERYTHRAE_MIND_API_KEY: 'fixture-mind-key',
           KAI_RUNNER_ENABLED: 'true',
           KAI_RUNNER_ROUTE: 'serythrae',
@@ -187,9 +189,9 @@ before(async () => {
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
   });
   const bundlePath = path.join(root, 'index.js');
-  oldOnly = runtime(bundlePath, { current: CURRENT_API_KEY });
-  nextOnly = runtime(bundlePath, { next: NEXT_API_KEY });
-  both = runtime(bundlePath, { current: CURRENT_API_KEY, next: NEXT_API_KEY });
+  oldOnly = runtime(bundlePath, { current: CURRENT_API_KEY, preflightDiscord: VEL_PREFLIGHT_DISCORD_API_KEY });
+  nextOnly = runtime(bundlePath, { next: NEXT_API_KEY, preflightDiscord: VEL_PREFLIGHT_DISCORD_API_KEY });
+  both = runtime(bundlePath, { current: CURRENT_API_KEY, next: NEXT_API_KEY, preflightDiscord: VEL_PREFLIGHT_DISCORD_API_KEY });
   missingConfig = runtime(bundlePath);
   await Promise.all([oldOnly.ready, nextOnly.ready, both.ready, missingConfig.ready]);
 });
@@ -367,38 +369,39 @@ test('health and sanitized status summary remain public without a bearer credent
   }
 });
 
-test('Vel preflight route is bearer-protected and non-Vel requests are explicitly not queried', async () => {
+test('Vel preflight route rejects general MCP and caller-asserted identity in favor of a server-owned lane key', async () => {
   const body = JSON.stringify({
-    author_is_vel: false,
-    verification: 'discord-owner-registry',
-    surface: 'discord',
+    author_is_vel: true,
+    verification: 'codex-local-user-session',
+    include_cycle: false,
   });
-  for (const [name, worker, activeKey] of [
+  for (const [name, worker, generalMcpKey] of [
     ['old-only', oldOnly, CURRENT_API_KEY],
     ['next-only', nextOnly, NEXT_API_KEY],
     ['both-current', both, CURRENT_API_KEY],
     ['both-next', both, NEXT_API_KEY],
   ]) {
-    for (const authorization of [undefined, `Bearer ${WRONG_API_KEY}`]) {
+    for (const authorization of [undefined, `Bearer ${WRONG_API_KEY}`, `Bearer ${generalMcpKey}`]) {
       const denied = await request(worker, '/api/preflight/vel', {
         method: 'POST',
         authorization,
         headers: { 'Content-Type': 'application/json' },
         body,
       });
-      assert.equal(denied.status, 401, `${name} accepted missing/wrong preflight auth`);
+      assert.equal(denied.status, 401, `${name} accepted a non-preflight credential`);
     }
     const accepted = await request(worker, '/api/preflight/vel', {
       method: 'POST',
-      authorization: `Bearer ${activeKey}`,
+      authorization: `Bearer ${VEL_PREFLIGHT_DISCORD_API_KEY}`,
       headers: { 'Content-Type': 'application/json' },
       body,
     });
     assert.equal(accepted.status, 200, name);
     const payload = await accepted.json();
-    assert.equal(payload.queried, false);
-    assert.equal(payload.source, 'not_queried');
-    assert.equal(payload.reason, 'author_not_verified_vel');
+    assert.equal(payload.queried, true);
+    assert.equal(payload.source, 'pulsesync');
+    assert.equal(payload.verification, 'discord-owner-registry');
+    assert.equal(payload.reason, 'pulsesync_binding_unavailable');
     assert.equal(payload.privacy.raw_values_included, false);
   }
 
@@ -408,4 +411,5 @@ test('Vel preflight route is bearer-protected and non-Vel requests are explicitl
     body,
   });
   assert.equal(unconfigured.status, 503);
+  assert.deepEqual(await unconfigured.json(), { error: 'Vel preflight caller credentials are not configured' });
 });

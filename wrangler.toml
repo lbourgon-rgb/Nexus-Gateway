@@ -109,6 +109,12 @@ KAI_RUNNER_FORWARD_FALLBACK = "true"
 # Secrets:
 # - MCP_API_KEY protects private Kai status, /mcp, and /sse endpoints.
 # - MCP_API_KEY_NEXT temporarily accepts a second credential during expand/migrate/contract rotation.
+# - VEL_PREFLIGHT_DISCORD_API_KEY authorizes the server-owned Discord owner-registry lane.
+# - VEL_PREFLIGHT_CODEX_API_KEY authorizes the local Codex user-session lane.
+# - VEL_PREFLIGHT_CLAUDE_API_KEY authorizes the local Claude user-session lane.
+# - VEL_PREFLIGHT_GROK_API_KEY authorizes the local Grok user-session lane.
+# - VEL_PREFLIGHT_HAVEN_API_KEY authorizes the authenticated Haven owner lane.
+# - VEL_PREFLIGHT_WORKSPACE_AGENT_API_KEY authorizes the Lucien Workspace Agent owner lane.
 # - CONTINUITY_API_KEY authorizes Continuity Worker calls.
 # - TESSURAE_GATEWAY_API_KEY authorizes Tessurae Gateway MCP calls.
 # - TESSURAE_COGCORE_API_KEY optionally authorizes direct Lucien CogCore REST calls if added.

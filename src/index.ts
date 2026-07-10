@@ -16,7 +16,7 @@ import { registerContinuityTools } from './tools/continuity'
 import { registerSerythraeTools } from './tools/serythrae'
 import { registerGrokKethNestTools } from './tools/grok-keth-nest'
 import { registerVelastraHQTools } from './tools/velastrahq'
-import { buildVelPreflightContext, isVelAuthorVerification } from './vel-preflight'
+import { buildVelPreflightContext, type VelAuthorVerification } from './vel-preflight'
 import { registerTahlTools } from './tools/tahl'
 import { proxyMcp } from './proxy'
 
@@ -413,6 +413,33 @@ async function authorizeMcpBearer(request: Request, env: Env): Promise<Response 
 async function authorizeRequiredMcpBearer(request: Request, env: Env): Promise<Response | null> {
   if (!configuredMcpApiKeys(env).length) return mcpApiKeyNotConfiguredResponse()
   return authorizeMcpBearer(request, env)
+}
+
+function velPreflightCallerKeys(env: Env): Array<{ key: string; verification: VelAuthorVerification }> {
+  const entries: Array<{ key: string | undefined; verification: VelAuthorVerification }> = [
+    { key: env.VEL_PREFLIGHT_DISCORD_API_KEY, verification: 'discord-owner-registry' },
+    { key: env.VEL_PREFLIGHT_CODEX_API_KEY, verification: 'codex-local-user-session' },
+    { key: env.VEL_PREFLIGHT_CLAUDE_API_KEY, verification: 'claude-local-user-session' },
+    { key: env.VEL_PREFLIGHT_GROK_API_KEY, verification: 'grok-local-user-session' },
+    { key: env.VEL_PREFLIGHT_HAVEN_API_KEY, verification: 'haven-authenticated-owner' },
+    { key: env.VEL_PREFLIGHT_WORKSPACE_AGENT_API_KEY, verification: 'workspace-agent-owner-session' },
+  ]
+  return entries.filter((entry): entry is { key: string; verification: VelAuthorVerification } => Boolean(entry.key))
+}
+
+async function authorizeVelPreflightCaller(request: Request, env: Env): Promise<VelAuthorVerification | Response> {
+  const callers = velPreflightCallerKeys(env)
+  if (!callers.length) {
+    return new Response(JSON.stringify({ error: 'Vel preflight caller credentials are not configured' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+  const provided = authToken(request)
+  if (!provided) return unauthorizedResponse()
+  const matches = await Promise.all(callers.map((caller) => timingSafeTokenMatch(provided, [caller.key])))
+  const matchIndex = matches.findIndex(Boolean)
+  return matchIndex >= 0 ? callers[matchIndex].verification : unauthorizedResponse()
 }
 
 function isInternalNexusServiceRequest(request: Request): boolean {
@@ -2628,20 +2655,11 @@ export default {
     }
 
     if (url.pathname === '/api/preflight/vel' && request.method === 'POST') {
-      const unauthorized = await authorizeRequiredMcpBearer(request, env)
-      if (unauthorized) return unauthorized
+      const caller = await authorizeVelPreflightCaller(request, env)
+      if (caller instanceof Response) return caller
       const body = await request.json().catch(() => ({})) as Record<string, unknown>
-      const verification = typeof body.verification === 'string' ? body.verification : 'unverified'
-      if (verification !== 'unverified' && !isVelAuthorVerification(verification)) {
-        return new Response(JSON.stringify({ error: 'unsupported author verification source' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...CORS },
-        })
-      }
       const context = await buildVelPreflightContext(env, {
-        author_is_vel: body.author_is_vel === true,
-        verification: verification === 'unverified' ? 'unverified' : verification,
-        surface: typeof body.surface === 'string' ? body.surface : 'unknown',
+        verification: caller,
         include_cycle: body.include_cycle === true,
       })
       return new Response(JSON.stringify(context), {
