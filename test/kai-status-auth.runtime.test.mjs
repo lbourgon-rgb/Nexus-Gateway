@@ -366,3 +366,46 @@ test('health and sanitized status summary remain public without a bearer credent
     }
   }
 });
+
+test('Vel preflight route is bearer-protected and non-Vel requests are explicitly not queried', async () => {
+  const body = JSON.stringify({
+    author_is_vel: false,
+    verification: 'discord-owner-registry',
+    surface: 'discord',
+  });
+  for (const [name, worker, activeKey] of [
+    ['old-only', oldOnly, CURRENT_API_KEY],
+    ['next-only', nextOnly, NEXT_API_KEY],
+    ['both-current', both, CURRENT_API_KEY],
+    ['both-next', both, NEXT_API_KEY],
+  ]) {
+    for (const authorization of [undefined, `Bearer ${WRONG_API_KEY}`]) {
+      const denied = await request(worker, '/api/preflight/vel', {
+        method: 'POST',
+        authorization,
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      assert.equal(denied.status, 401, `${name} accepted missing/wrong preflight auth`);
+    }
+    const accepted = await request(worker, '/api/preflight/vel', {
+      method: 'POST',
+      authorization: `Bearer ${activeKey}`,
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    assert.equal(accepted.status, 200, name);
+    const payload = await accepted.json();
+    assert.equal(payload.queried, false);
+    assert.equal(payload.source, 'not_queried');
+    assert.equal(payload.reason, 'author_not_verified_vel');
+    assert.equal(payload.privacy.raw_values_included, false);
+  }
+
+  const unconfigured = await request(missingConfig, '/api/preflight/vel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+  assert.equal(unconfigured.status, 503);
+});
