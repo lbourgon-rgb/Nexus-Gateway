@@ -383,23 +383,34 @@ function mcpApiKeyNotConfiguredResponse(): Response {
   })
 }
 
-async function timingSafeTokenMatch(provided: string, expected: string): Promise<boolean> {
+function configuredMcpApiKeys(env: Env): string[] {
+  return [env.MCP_API_KEY, env.MCP_API_KEY_NEXT]
+    .filter((value): value is string => Boolean(value))
+}
+
+async function timingSafeTokenMatch(provided: string, expected: readonly string[]): Promise<boolean> {
   const encoder = new TextEncoder()
-  const [providedHash, expectedHash] = await Promise.all([
+  const [providedHash, ...expectedHashes] = await Promise.all([
     crypto.subtle.digest('SHA-256', encoder.encode(provided)),
-    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
+    ...expected.map((value) => crypto.subtle.digest('SHA-256', encoder.encode(value))),
   ])
-  return crypto.subtle.timingSafeEqual(providedHash, expectedHash)
+  let matched = false
+  for (const expectedHash of expectedHashes) {
+    const candidateMatched = crypto.subtle.timingSafeEqual(providedHash, expectedHash)
+    matched = candidateMatched || matched
+  }
+  return matched
 }
 
 async function authorizeMcpBearer(request: Request, env: Env): Promise<Response | null> {
-  if (!env.MCP_API_KEY) return null
+  const expected = configuredMcpApiKeys(env)
+  if (!expected.length) return null
   const provided = authToken(request)
-  return provided && await timingSafeTokenMatch(provided, env.MCP_API_KEY) ? null : unauthorizedResponse()
+  return provided && await timingSafeTokenMatch(provided, expected) ? null : unauthorizedResponse()
 }
 
 async function authorizeRequiredMcpBearer(request: Request, env: Env): Promise<Response | null> {
-  if (!env.MCP_API_KEY) return mcpApiKeyNotConfiguredResponse()
+  if (!configuredMcpApiKeys(env).length) return mcpApiKeyNotConfiguredResponse()
   return authorizeMcpBearer(request, env)
 }
 
@@ -2118,10 +2129,8 @@ async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> 
     })
   }
 
-  if (env.MCP_API_KEY) {
-    const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeMcpBearer(request, env)
-    if (unauthorized) return unauthorized
-  }
+  const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeMcpBearer(request, env)
+  if (unauthorized) return unauthorized
 
   const body = await request.json().catch(() => ({})) as Record<string, unknown>
   const envelope = normalizeKaiRunnerEnvelope(body)
@@ -2619,25 +2628,23 @@ export default {
       return kaiRunnerPreview(request, env)
     }
 
-    // Authentication check for /mcp and /sse endpoints.
+    // Authentication check for /mcp and /sse endpoints. MCP_API_KEY_NEXT is a
+    // temporary credential-rotation binding; either configured key is accepted.
     // Supports either:
-    // - Authorization: Bearer <MCP_API_KEY> on /mcp or /sse
-    // - URL-path auth for clients that only support a single URL: /mcp/<MCP_API_KEY> or /sse/<MCP_API_KEY>
+    // - Authorization: Bearer <configured MCP key> on /mcp or /sse
+    // - URL-path auth for clients that only support a single URL: /mcp/<configured MCP key> or /sse/<configured MCP key>
     const mcpPathMatch = url.pathname.match(/^\/(mcp|sse)\/([^/]+)$/)
     const isMcpPath = url.pathname === '/mcp' || url.pathname === '/sse'
     const isSseMessage = url.pathname === '/sse/message'
     const requiresMcpAuth = Boolean(mcpPathMatch) || isMcpPath || isSseMessage
+    const configuredKeys = configuredMcpApiKeys(env)
+    let mcpAuthenticated = false
 
     if (requiresMcpAuth) {
-      if (!env.MCP_API_KEY) {
-        return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json', ...CORS }
-        })
-      }
+      if (!configuredKeys.length) return mcpApiKeyNotConfiguredResponse()
 
       if (mcpPathMatch) {
-        if (mcpPathMatch[2] !== env.MCP_API_KEY) {
+        if (!await timingSafeTokenMatch(mcpPathMatch[2], configuredKeys)) {
           return new Response(JSON.stringify({ error: 'Unauthorized — invalid URL token' }), {
             status: 401,
             headers: { 'Content-Type': 'application/json', ...CORS }
@@ -2648,25 +2655,22 @@ export default {
         request = new Request(cleanUrl.toString(), request)
         url = cleanUrl
       } else {
-        const authHeader = request.headers.get('Authorization')
-        const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
-        if (token !== env.MCP_API_KEY) {
+        const token = authToken(request)
+        if (!token || !await timingSafeTokenMatch(token, configuredKeys)) {
           return new Response(JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }), {
             status: 401,
             headers: { 'Content-Type': 'application/json', ...CORS }
           })
         }
       }
+      mcpAuthenticated = true
     }
 
     // Antigravity notification fix: POST without Mcp-Session-Id that has no 'id' field
     // Antigravity doesn't send session ID on notifications — return 202 instead of erroring
     if (request.method === 'POST' && (url.pathname === '/mcp' || url.pathname === '/sse')) {
-      const authHeader = request.headers.get('Authorization')
-      const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
       const sessionId = request.headers.get('Mcp-Session-Id')
-      const pathAuthenticated = Boolean(mcpPathMatch)
-      if (env.MCP_API_KEY && (token === env.MCP_API_KEY || pathAuthenticated) && !sessionId && url.pathname === '/mcp') {
+      if (mcpAuthenticated && !sessionId && url.pathname === '/mcp') {
         try {
           const clone = request.clone()
           const body = await clone.json() as any

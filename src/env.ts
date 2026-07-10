@@ -42,6 +42,7 @@ export interface Env {
 
   // Secrets
   MCP_API_KEY?: string
+  MCP_API_KEY_NEXT?: string
   CONTINUITY_API_KEY?: string
   TESSURAE_GATEWAY_API_KEY?: string
   TESSURAE_COGCORE_API_KEY?: string

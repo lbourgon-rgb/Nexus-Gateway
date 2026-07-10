@@ -24,3 +24,4 @@ new_sqlite_classes = ["NexusGateway"]
 
 # Secrets (set via wrangler secret put):
 # - MCP_API_KEY
+# - MCP_API_KEY_NEXT (temporary; only during credential rotation)

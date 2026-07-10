@@ -194,6 +194,8 @@ npx wrangler deploy
 
 Your gateway is now live. Connect Claude, Cursor, or any MCP client to `https://your-gateway.workers.dev/mcp`.
 
+For a no-downtime bearer credential change, follow the temporary `MCP_API_KEY_NEXT` expand/migrate/contract and rollback procedure in [MCP API key rotation](docs/mcp-api-key-rotation.md). Do not leave the next-key binding configured after the rotation is contracted.
+
 ## The Proxy Layer
 
 ### `proxyRest(url, body, method)`

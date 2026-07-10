@@ -12,6 +12,7 @@ const cogcorTools = readFileSync(new URL('../src/tools/cogcor.ts', import.meta.u
 const grokKethNestTools = readFileSync(new URL('../src/tools/grok-keth-nest.ts', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 const nexusIndex = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+const rotationDoc = readFileSync(new URL('../docs/mcp-api-key-rotation.md', import.meta.url), 'utf8');
 
 test('Nexus exposes runner-facing Continuity wake tools', () => {
   for (const toolName of [
@@ -335,8 +336,13 @@ test('Nexus exposes a sanitized Kai brain status endpoint for the UI', () => {
 
 test('private Kai status routes require fail-closed MCP bearer auth while public summaries stay open', () => {
   assert.match(nexusIndex, /async function authorizeRequiredMcpBearer\(request: Request, env: Env\): Promise<Response \| null>/);
-  assert.match(nexusIndex, /if \(!env\.MCP_API_KEY\) return mcpApiKeyNotConfiguredResponse\(\)/);
+  assert.match(nexusIndex, /return \[env\.MCP_API_KEY, env\.MCP_API_KEY_NEXT\]/);
+  assert.match(nexusIndex, /if \(!configuredMcpApiKeys\(env\)\.length\) return mcpApiKeyNotConfiguredResponse\(\)/);
   assert.match(nexusIndex, /crypto\.subtle\.timingSafeEqual\(providedHash, expectedHash\)/);
+  assert.doesNotMatch(nexusIndex, /mcpPathMatch\[2\] !== env\.MCP_API_KEY/);
+  assert.doesNotMatch(nexusIndex, /token !== env\.MCP_API_KEY/);
+  assert.doesNotMatch(nexusIndex, /token === env\.MCP_API_KEY/);
+  assert.doesNotMatch(nexusIndex, /if \(env\.MCP_API_KEY\) \{\s+const unauthorized = isInternalNexusServiceRequest/);
 
   for (const route of [
     '/api/kaisoryth/brain-status',
@@ -356,6 +362,14 @@ test('private Kai status routes require fail-closed MCP bearer auth while public
     const routeBlock = nexusIndex.slice(routeIndex, routeIndex + 220);
     assert.doesNotMatch(routeBlock, /authorizeRequiredMcpBearer/, `${route} must remain public`);
   }
+});
+
+test('temporary MCP credential rotation documents expand, migrate, contract, and rollback', () => {
+  assert.match(rotationDoc, /temporary `MCP_API_KEY_NEXT`/);
+  assert.match(rotationDoc, /## Expand, migrate, contract/);
+  assert.match(rotationDoc, /## Rollback/);
+  assert.match(rotationDoc, /neither key \| none \| fail closed with `503`/);
+  assert.match(rotationDoc, /steady state is one configured `MCP_API_KEY`/);
 });
 
 test('Kai Catalouge reading trigger requires explicit book intent', () => {

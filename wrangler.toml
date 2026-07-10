@@ -102,7 +102,8 @@ KAI_RUNNER_ROUTE = "serythrae"
 KAI_RUNNER_FORWARD_FALLBACK = "true"
 
 # Secrets:
-# - MCP_API_KEY protects /mcp and /sse endpoints.
+# - MCP_API_KEY protects private Kai status, /mcp, and /sse endpoints.
+# - MCP_API_KEY_NEXT temporarily accepts a second credential during expand/migrate/contract rotation.
 # - CONTINUITY_API_KEY authorizes Continuity Worker calls.
 # - TESSURAE_GATEWAY_API_KEY authorizes Tessurae Gateway MCP calls.
 # - TESSURAE_COGCORE_API_KEY optionally authorizes direct Lucien CogCore REST calls if added.

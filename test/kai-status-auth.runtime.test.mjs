@@ -9,8 +9,11 @@ import { after, before, test } from 'node:test';
 import { Miniflare } from 'miniflare';
 
 const execFileAsync = promisify(execFile);
-const API_KEY = 'fixture-mcp-api-key';
+const CURRENT_API_KEY = 'fixture-current-mcp-api-key';
+const NEXT_API_KEY = 'fixture-next-mcp-api-key';
+const WRONG_API_KEY = 'fixture-wrong-mcp-api-key';
 const PRIVATE_ROUTES = [
+  '/api/kaisoryth/context',
   '/api/kaisoryth/brain-status',
   '/api/kaisoryth/reading-status',
   '/api/kaisoryth/mind-dashboard',
@@ -73,10 +76,12 @@ export default {
 `;
 
 let root;
-let configured;
+let oldOnly;
+let nextOnly;
+let both;
 let missingConfig;
 
-function runtime(bundlePath, apiKey) {
+function runtime(bundlePath, { current, next } = {}) {
   return new Miniflare({
     workers: [
       {
@@ -86,10 +91,13 @@ function runtime(bundlePath, apiKey) {
         modules: true,
         modulesRoot: path.dirname(bundlePath),
         scriptPath: bundlePath,
-        durableObjects: { MCP_OBJECT: 'NexusGateway' },
+        durableObjects: { MCP_OBJECT: { className: 'NexusGateway', useSQLite: true } },
         bindings: {
-          ...(apiKey ? { MCP_API_KEY: apiKey } : {}),
+          ...(current ? { MCP_API_KEY: current } : {}),
+          ...(next ? { MCP_API_KEY_NEXT: next } : {}),
           SERYTHRAE_MIND_API_KEY: 'fixture-mind-key',
+          KAI_RUNNER_ENABLED: 'true',
+          KAI_RUNNER_ROUTE: 'nexus',
         },
         serviceBindings: {
           ARCHIVE: 'backend-mock',
@@ -107,9 +115,62 @@ function runtime(bundlePath, apiKey) {
   });
 }
 
+async function request(worker, route, { authorization, method = 'GET', headers, body, baseUrl = 'https://nexus.test' } = {}) {
+  const requestHeaders = new Headers(headers);
+  if (authorization) requestHeaders.set('Authorization', authorization);
+  return worker.dispatchFetch(`${baseUrl}${route}`, {
+    method,
+    headers: requestHeaders,
+    body,
+  });
+}
+
 async function get(worker, route, authorization) {
-  const headers = authorization ? { Authorization: authorization } : undefined;
-  return worker.dispatchFetch(`https://nexus.test${route}`, { headers });
+  return request(worker, route, { authorization });
+}
+
+function assertHeadersDoNotLeak(response, secrets, label) {
+  const exposed = [response.url, ...[...response.headers.entries()].flat()].join('\n');
+  for (const secret of secrets) {
+    assert.doesNotMatch(exposed, new RegExp(secret, 'g'), `${label} leaked ${secret} in response metadata`);
+  }
+}
+
+function assertTextDoesNotLeak(text, secrets, label) {
+  for (const secret of secrets) {
+    assert.doesNotMatch(text, new RegExp(secret, 'g'), `${label} leaked ${secret} in response body`);
+  }
+}
+
+async function mcpNotification(worker, route, authorization) {
+  return request(worker, route, {
+    authorization,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+  });
+}
+
+async function assertSseAuthAccepted(worker, route, authorization, label) {
+  const response = await request(worker, route, { authorization });
+  assert.notEqual(response.status, 401, `${label} was rejected`);
+  assert.notEqual(response.status, 503, `${label} was treated as unconfigured`);
+  assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY], label);
+  await response.body?.cancel();
+}
+
+async function assertSseMessageAuthAccepted(worker, authorization, label) {
+  const response = await request(worker, '/sse/message', {
+    authorization,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+  });
+  assert.notEqual(response.status, 503, `${label} was treated as unconfigured`);
+  assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY], label);
+  const text = await response.text();
+  assert.notEqual(text, JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }), `${label} failed at the outer auth guard`);
+  assertTextDoesNotLeak(text, [CURRENT_API_KEY, NEXT_API_KEY], label);
 }
 
 before(async () => {
@@ -125,13 +186,15 @@ before(async () => {
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
   });
   const bundlePath = path.join(root, 'index.js');
-  configured = runtime(bundlePath, API_KEY);
-  missingConfig = runtime(bundlePath, null);
-  await Promise.all([configured.ready, missingConfig.ready]);
+  oldOnly = runtime(bundlePath, { current: CURRENT_API_KEY });
+  nextOnly = runtime(bundlePath, { next: NEXT_API_KEY });
+  both = runtime(bundlePath, { current: CURRENT_API_KEY, next: NEXT_API_KEY });
+  missingConfig = runtime(bundlePath);
+  await Promise.all([oldOnly.ready, nextOnly.ready, both.ready, missingConfig.ready]);
 });
 
 after(async () => {
-  await Promise.all([configured?.dispose(), missingConfig?.dispose()]);
+  await Promise.all([oldOnly?.dispose(), nextOnly?.dispose(), both?.dispose(), missingConfig?.dispose()]);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -143,29 +206,133 @@ test('private Kai status routes return 503 when MCP bearer configuration is miss
   }
 });
 
-test('private Kai status routes reject missing and incorrect bearer credentials', async () => {
-  for (const route of PRIVATE_ROUTES) {
-    const missing = await get(configured, route);
-    assert.equal(missing.status, 401, `${route} missing bearer`);
-    assert.deepEqual(await missing.json(), { error: 'Unauthorized' });
-
-    const wrong = await get(configured, route, 'Bearer wrong-key');
-    assert.equal(wrong.status, 401, `${route} wrong bearer`);
-    assert.deepEqual(await wrong.json(), { error: 'Unauthorized' });
+test('private Kai status routes reject missing and incorrect bearer credentials without leaking secrets', async () => {
+  for (const [name, worker] of [['old-only', oldOnly], ['next-only', nextOnly], ['both', both]]) {
+    for (const route of PRIVATE_ROUTES) {
+      for (const [credential, authorization] of [['missing', undefined], ['wrong', `Bearer ${WRONG_API_KEY}`]]) {
+        const response = await get(worker, route, authorization);
+        assert.equal(response.status, 401, `${name} ${route} ${credential} bearer`);
+        assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY], `${name} ${route} ${credential}`);
+        const text = await response.text();
+        assertTextDoesNotLeak(text, [CURRENT_API_KEY, NEXT_API_KEY], `${name} ${route} ${credential}`);
+        assert.deepEqual(JSON.parse(text), { error: 'Unauthorized' });
+      }
+    }
   }
 });
 
-test('private Kai status routes accept the configured bearer credential', async () => {
-  for (const route of PRIVATE_ROUTES) {
-    const response = await get(configured, route, `Bearer ${API_KEY}`);
-    assert.equal(response.status, 200, route);
-    const body = await response.json();
-    assert.equal(body.companion_id, 'kaisoryth', route);
+test('private Kai status routes support old-only, next-only, and dual-key rotation states', async () => {
+  const accepted = [
+    ['old-only current', oldOnly, CURRENT_API_KEY],
+    ['next-only next', nextOnly, NEXT_API_KEY],
+    ['both current', both, CURRENT_API_KEY],
+    ['both next', both, NEXT_API_KEY],
+  ];
+  for (const [name, worker, key] of accepted) {
+    for (const route of PRIVATE_ROUTES) {
+      const response = await get(worker, route, `Bearer ${key}`);
+      assert.equal(response.status, 200, `${name} ${route}`);
+      const body = await response.json();
+      assert.equal(body.companion_id, 'kaisoryth', `${name} ${route}`);
+    }
+  }
+
+  assert.equal((await get(oldOnly, PRIVATE_ROUTES[0], `Bearer ${NEXT_API_KEY}`)).status, 401);
+  assert.equal((await get(nextOnly, PRIVATE_ROUTES[0], `Bearer ${CURRENT_API_KEY}`)).status, 401);
+});
+
+test('MCP header and URL-path authentication support every rotation state', async () => {
+  const accepted = [
+    ['old-only current', oldOnly, CURRENT_API_KEY],
+    ['next-only next', nextOnly, NEXT_API_KEY],
+    ['both current', both, CURRENT_API_KEY],
+    ['both next', both, NEXT_API_KEY],
+  ];
+  for (const [name, worker, key] of accepted) {
+    const headerResponse = await mcpNotification(worker, '/mcp', `Bearer ${key}`);
+    assert.equal(headerResponse.status, 202, `${name} MCP header`);
+    assertHeadersDoNotLeak(headerResponse, [CURRENT_API_KEY, NEXT_API_KEY], `${name} MCP header`);
+
+    const pathResponse = await mcpNotification(worker, `/mcp/${key}`);
+    assert.equal(pathResponse.status, 202, `${name} MCP path`);
+    assertHeadersDoNotLeak(pathResponse, [CURRENT_API_KEY, NEXT_API_KEY], `${name} MCP path`);
+  }
+});
+
+test('SSE header, message, and URL-path authentication support both rotation credentials', async () => {
+  for (const [name, worker, key] of [
+    ['old-only current', oldOnly, CURRENT_API_KEY],
+    ['next-only next', nextOnly, NEXT_API_KEY],
+    ['both current', both, CURRENT_API_KEY],
+    ['both next', both, NEXT_API_KEY],
+  ]) {
+    await assertSseAuthAccepted(worker, '/sse', `Bearer ${key}`, `${name} SSE header`);
+    await assertSseAuthAccepted(worker, `/sse/${key}`, undefined, `${name} SSE path`);
+    await assertSseMessageAuthAccepted(worker, `Bearer ${key}`, `${name} SSE message`);
+  }
+});
+
+test('MCP and SSE transports fail closed for missing, wrong, and unconfigured credentials without secret leakage', async () => {
+  for (const route of ['/mcp', '/sse', '/sse/message']) {
+    for (const [credential, authorization] of [['missing', undefined], ['wrong', `Bearer ${WRONG_API_KEY}`]]) {
+      const response = await request(both, route, { authorization });
+      assert.equal(response.status, 401, `${route} ${credential}`);
+      assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY], `${route} ${credential}`);
+      assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY], `${route} ${credential}`);
+    }
+
+    const unconfigured = await request(missingConfig, route);
+    assert.equal(unconfigured.status, 503, `${route} unconfigured`);
+  }
+
+  for (const route of [`/mcp/${WRONG_API_KEY}`, `/sse/${WRONG_API_KEY}`]) {
+    const response = await request(both, route);
+    assert.equal(response.status, 401, `${route} wrong path credential`);
+    assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY], `${route} wrong path credential`);
+    const text = await response.text();
+    assertTextDoesNotLeak(text, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], `${route} wrong path credential`);
+  }
+
+  for (const [name, worker, inactiveKey] of [
+    ['old-only', oldOnly, NEXT_API_KEY],
+    ['next-only', nextOnly, CURRENT_API_KEY],
+  ]) {
+    assert.equal((await request(worker, '/mcp', { authorization: `Bearer ${inactiveKey}` })).status, 401, `${name} inactive MCP header key`);
+    assert.equal((await request(worker, `/mcp/${inactiveKey}`)).status, 401, `${name} inactive MCP path key`);
+    assert.equal((await request(worker, '/sse', { authorization: `Bearer ${inactiveKey}` })).status, 401, `${name} inactive SSE header key`);
+    assert.equal((await request(worker, `/sse/${inactiveKey}`)).status, 401, `${name} inactive SSE path key`);
+  }
+});
+
+test('optional Kai runner auth accepts either configured key and preserves no-key and internal bypass semantics', async () => {
+  const init = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: '' }),
+  };
+
+  assert.equal((await request(nextOnly, '/api/kaisoryth/run', {
+    ...init,
+    authorization: `Bearer ${CURRENT_API_KEY}`,
+  })).status, 401, 'next-only runner rejects inactive current key');
+
+  for (const [name, worker, authorization, baseUrl] of [
+    ['next-only external', nextOnly, `Bearer ${NEXT_API_KEY}`, 'https://nexus.test'],
+    ['both external current', both, `Bearer ${CURRENT_API_KEY}`, 'https://nexus.test'],
+    ['both external next', both, `Bearer ${NEXT_API_KEY}`, 'https://nexus.test'],
+    ['no-key external', missingConfig, undefined, 'https://nexus.test'],
+    ['internal bypass', nextOnly, `Bearer ${WRONG_API_KEY}`, 'https://nexus.internal'],
+  ]) {
+    const response = await request(worker, '/api/kaisoryth/run', { ...init, authorization, baseUrl });
+    assert.notEqual(response.status, 401, `${name} should pass optional auth`);
+    assert.notEqual(response.status, 503, `${name} should not require missing auth configuration`);
+    assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
+    assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
   }
 });
 
 test('health and sanitized status summary remain public without a bearer credential', async () => {
-  for (const worker of [configured, missingConfig]) {
+  for (const worker of [oldOnly, nextOnly, both, missingConfig]) {
     for (const route of PUBLIC_ROUTES) {
       const response = await get(worker, route);
       assert.equal(response.status, 200, route);
