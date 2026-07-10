@@ -333,6 +333,31 @@ test('Nexus exposes a sanitized Kai brain status endpoint for the UI', () => {
   }
 });
 
+test('private Kai status routes require fail-closed MCP bearer auth while public summaries stay open', () => {
+  assert.match(nexusIndex, /async function authorizeRequiredMcpBearer\(request: Request, env: Env\): Promise<Response \| null>/);
+  assert.match(nexusIndex, /if \(!env\.MCP_API_KEY\) return mcpApiKeyNotConfiguredResponse\(\)/);
+  assert.match(nexusIndex, /crypto\.subtle\.timingSafeEqual\(providedHash, expectedHash\)/);
+
+  for (const route of [
+    '/api/kaisoryth/brain-status',
+    '/api/kaisoryth/reading-status',
+    '/api/kaisoryth/mind-dashboard',
+  ]) {
+    const routeIndex = nexusIndex.indexOf(`if (url.pathname === '${route}' && request.method === 'GET')`);
+    assert.notEqual(routeIndex, -1, `missing ${route}`);
+    const routeBlock = nexusIndex.slice(routeIndex, routeIndex + 320);
+    assert.match(routeBlock, /await authorizeRequiredMcpBearer\(request, env\)/, `${route} must require bearer auth`);
+    assert.match(routeBlock, /if \(unauthorized\) return unauthorized/, `${route} must fail closed before its handler`);
+  }
+
+  for (const route of ['/health', '/status/summary']) {
+    const routeIndex = nexusIndex.indexOf(`url.pathname === '${route}'`);
+    assert.notEqual(routeIndex, -1, `missing public route ${route}`);
+    const routeBlock = nexusIndex.slice(routeIndex, routeIndex + 220);
+    assert.doesNotMatch(routeBlock, /authorizeRequiredMcpBearer/, `${route} must remain public`);
+  }
+});
+
 test('Kai Catalouge reading trigger requires explicit book intent', () => {
   assert.match(nexusIndex, /body\.catalouge_read === true/);
   assert.match(nexusIndex, /Our Perfect Storm\|All Systems Red\|Yesteryear/);

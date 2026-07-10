@@ -376,9 +376,31 @@ function unauthorizedResponse(): Response {
   })
 }
 
-function authorizeMcpBearer(request: Request, env: Env): Response | null {
+function mcpApiKeyNotConfiguredResponse(): Response {
+  return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  })
+}
+
+async function timingSafeTokenMatch(provided: string, expected: string): Promise<boolean> {
+  const encoder = new TextEncoder()
+  const [providedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(provided)),
+    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
+  ])
+  return crypto.subtle.timingSafeEqual(providedHash, expectedHash)
+}
+
+async function authorizeMcpBearer(request: Request, env: Env): Promise<Response | null> {
   if (!env.MCP_API_KEY) return null
-  return authToken(request) === env.MCP_API_KEY ? null : unauthorizedResponse()
+  const provided = authToken(request)
+  return provided && await timingSafeTokenMatch(provided, env.MCP_API_KEY) ? null : unauthorizedResponse()
+}
+
+async function authorizeRequiredMcpBearer(request: Request, env: Env): Promise<Response | null> {
+  if (!env.MCP_API_KEY) return mcpApiKeyNotConfiguredResponse()
+  return authorizeMcpBearer(request, env)
 }
 
 function isInternalNexusServiceRequest(request: Request): boolean {
@@ -1976,13 +1998,7 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
 }
 
 async function kaiContext(request: Request, env: Env): Promise<Response> {
-  if (!env.MCP_API_KEY) {
-    return new Response(JSON.stringify({ error: 'MCP_API_KEY is not configured' }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json', ...CORS },
-    })
-  }
-  const unauthorized = authorizeMcpBearer(request, env)
+  const unauthorized = await authorizeRequiredMcpBearer(request, env)
   if (unauthorized) return unauthorized
 
   const body = request.method === 'POST' ? await request.json().catch(() => ({})) as Record<string, unknown> : {}
@@ -2103,7 +2119,7 @@ async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> 
   }
 
   if (env.MCP_API_KEY) {
-    const unauthorized = isInternalNexusServiceRequest(request) ? null : authorizeMcpBearer(request, env)
+    const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeMcpBearer(request, env)
     if (unauthorized) return unauthorized
   }
 
@@ -2578,14 +2594,20 @@ export default {
     }
 
     if (url.pathname === '/api/kaisoryth/brain-status' && request.method === 'GET') {
+      const unauthorized = await authorizeRequiredMcpBearer(request, env)
+      if (unauthorized) return unauthorized
       return kaiBrainStatus(env)
     }
 
     if (url.pathname === '/api/kaisoryth/reading-status' && request.method === 'GET') {
+      const unauthorized = await authorizeRequiredMcpBearer(request, env)
+      if (unauthorized) return unauthorized
       return kaiReadingStatus(env)
     }
 
     if (url.pathname === '/api/kaisoryth/mind-dashboard' && request.method === 'GET') {
+      const unauthorized = await authorizeRequiredMcpBearer(request, env)
+      if (unauthorized) return unauthorized
       return kaiMindDashboard(env)
     }
 
