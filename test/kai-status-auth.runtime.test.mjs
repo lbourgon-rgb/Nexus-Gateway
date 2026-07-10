@@ -81,8 +81,10 @@ let oldOnly;
 let nextOnly;
 let both;
 let missingConfig;
+let duplicatePreflightConfig;
+let mcpCollisionPreflightConfig;
 
-function runtime(bundlePath, { current, next, preflightDiscord } = {}) {
+function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex } = {}) {
   return new Miniflare({
     workers: [
       {
@@ -97,6 +99,7 @@ function runtime(bundlePath, { current, next, preflightDiscord } = {}) {
           ...(current ? { MCP_API_KEY: current } : {}),
           ...(next ? { MCP_API_KEY_NEXT: next } : {}),
           ...(preflightDiscord ? { VEL_PREFLIGHT_DISCORD_API_KEY: preflightDiscord } : {}),
+          ...(preflightCodex ? { VEL_PREFLIGHT_CODEX_API_KEY: preflightCodex } : {}),
           SERYTHRAE_MIND_API_KEY: 'fixture-mind-key',
           KAI_RUNNER_ENABLED: 'true',
           KAI_RUNNER_ROUTE: 'serythrae',
@@ -193,11 +196,34 @@ before(async () => {
   nextOnly = runtime(bundlePath, { next: NEXT_API_KEY, preflightDiscord: VEL_PREFLIGHT_DISCORD_API_KEY });
   both = runtime(bundlePath, { current: CURRENT_API_KEY, next: NEXT_API_KEY, preflightDiscord: VEL_PREFLIGHT_DISCORD_API_KEY });
   missingConfig = runtime(bundlePath);
-  await Promise.all([oldOnly.ready, nextOnly.ready, both.ready, missingConfig.ready]);
+  duplicatePreflightConfig = runtime(bundlePath, {
+    current: CURRENT_API_KEY,
+    preflightDiscord: VEL_PREFLIGHT_DISCORD_API_KEY,
+    preflightCodex: VEL_PREFLIGHT_DISCORD_API_KEY,
+  });
+  mcpCollisionPreflightConfig = runtime(bundlePath, {
+    current: CURRENT_API_KEY,
+    preflightDiscord: CURRENT_API_KEY,
+  });
+  await Promise.all([
+    oldOnly.ready,
+    nextOnly.ready,
+    both.ready,
+    missingConfig.ready,
+    duplicatePreflightConfig.ready,
+    mcpCollisionPreflightConfig.ready,
+  ]);
 });
 
 after(async () => {
-  await Promise.all([oldOnly?.dispose(), nextOnly?.dispose(), both?.dispose(), missingConfig?.dispose()]);
+  await Promise.all([
+    oldOnly?.dispose(),
+    nextOnly?.dispose(),
+    both?.dispose(),
+    missingConfig?.dispose(),
+    duplicatePreflightConfig?.dispose(),
+    mcpCollisionPreflightConfig?.dispose(),
+  ]);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -412,4 +438,22 @@ test('Vel preflight route rejects general MCP and caller-asserted identity in fa
   });
   assert.equal(unconfigured.status, 503);
   assert.deepEqual(await unconfigured.json(), { error: 'Vel preflight caller credentials are not configured' });
+});
+
+test('Vel preflight fails closed when lane credentials are duplicated or collide with general MCP authority', async () => {
+  for (const [label, worker, bearer] of [
+    ['duplicate lanes', duplicatePreflightConfig, VEL_PREFLIGHT_DISCORD_API_KEY],
+    ['MCP collision', mcpCollisionPreflightConfig, CURRENT_API_KEY],
+  ]) {
+    const response = await request(worker, '/api/preflight/vel', {
+      method: 'POST',
+      authorization: `Bearer ${bearer}`,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ include_cycle: false }),
+    });
+    assert.equal(response.status, 503, label);
+    assert.deepEqual(await response.json(), {
+      error: 'Vel preflight caller credential configuration is ambiguous',
+    }, label);
+  }
 });

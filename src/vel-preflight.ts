@@ -32,10 +32,12 @@ interface PulseRow {
 interface Freshness {
   state: 'fresh' | 'stale' | 'unavailable'
   age_bucket?: string
+  reason?: string
 }
 
 const LATEST_RECEIPT_MARKER = '__latest_receipt__'
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000
+const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000
 
 function isoFromMillis(value: unknown): string | null {
   const millis = Number(value)
@@ -51,11 +53,16 @@ function ageBucket(receivedAt: number, now: number): string {
   return 'over_24h'
 }
 
-function rowFreshness(row: PulseRow | undefined, now: number): Freshness {
-  const receivedAt = Number(row?.received_at)
-  if (!Number.isFinite(receivedAt) || receivedAt <= 0) return { state: 'unavailable' }
-  const bucket = ageBucket(receivedAt, now)
+function timestampFreshness(value: unknown, now: number): Freshness {
+  const timestamp = Number(value)
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return { state: 'unavailable' }
+  if (timestamp > now + MAX_FUTURE_SKEW_MS) return { state: 'unavailable', reason: 'future_timestamp' }
+  const bucket = ageBucket(timestamp, now)
   return { state: bucket === 'over_24h' ? 'stale' : 'fresh', age_bucket: bucket }
+}
+
+function observationFreshness(row: PulseRow | undefined, now: number): Freshness {
+  return timestampFreshness(row?.start_ts, now)
 }
 
 function cycleContext(value: number | null): string | null {
@@ -75,10 +82,11 @@ function latestSubjectiveQuery(includeCycle: boolean): { sql: string; types: str
       SELECT type, value, start_ts, received_at,
              ROW_NUMBER() OVER (
                PARTITION BY type
-               ORDER BY received_at DESC, start_ts DESC, rowid DESC
+               ORDER BY start_ts DESC, received_at DESC, rowid DESC
              ) AS row_rank
         FROM samples
        WHERE type IN (${placeholders})
+         AND start_ts <= ?
     )
     SELECT type, value, start_ts, received_at
       FROM ranked
@@ -119,7 +127,9 @@ export async function buildVelPreflightContext(
   }
 
   const query = latestSubjectiveQuery(request.include_cycle === true)
-  const result = await env.PULSESYNC_DB.prepare(query.sql).bind(...query.types).all<PulseRow>()
+  const result = await env.PULSESYNC_DB.prepare(query.sql)
+    .bind(...query.types, now + MAX_FUTURE_SKEW_MS)
+    .all<PulseRow>()
   const rows = result.results || []
   const latestReceiptRow = rows.find(row => row.type === LATEST_RECEIPT_MARKER)
   const latestReceipt = Number(latestReceiptRow?.received_at)
@@ -138,8 +148,8 @@ export async function buildVelPreflightContext(
   const byType = new Map(rows.filter(row => row.type !== LATEST_RECEIPT_MARKER).map(row => [row.type, row]))
   const spoonsRow = byType.get('subjective.spoons')
   const demandsRow = byType.get('subjective.dailyDemands')
-  const spoonsFreshness = rowFreshness(spoonsRow, now)
-  const demandsFreshness = rowFreshness(demandsRow, now)
+  const spoonsFreshness = observationFreshness(spoonsRow, now)
+  const demandsFreshness = observationFreshness(demandsRow, now)
   const spoons = spoonsFreshness.state === 'fresh' ? spoonsRow?.value ?? null : null
   const demands = demandsFreshness.state === 'fresh' ? demandsRow?.value ?? null : null
   const pacing = new Set<string>()
@@ -164,7 +174,7 @@ export async function buildVelPreflightContext(
   }
   if (!pacing.size) pacing.add('respond_to_message_only')
 
-  const receiptFreshness = rowFreshness(latestReceiptRow, now)
+  const receiptFreshness = timestampFreshness(latestReceiptRow?.received_at, now)
   const payload: Record<string, any> = {
     queried: true,
     source: 'pulsesync',
@@ -184,7 +194,7 @@ export async function buildVelPreflightContext(
 
   if (request.include_cycle === true) {
     const cycleRow = byType.get('subjective.cycleDay')
-    const cycleFreshness = rowFreshness(cycleRow, now)
+    const cycleFreshness = observationFreshness(cycleRow, now)
     payload.optional_context = {
       cycle: cycleFreshness.state === 'fresh' ? cycleContext(cycleRow?.value ?? null) || 'unavailable' : 'unavailable',
       freshness: cycleFreshness,

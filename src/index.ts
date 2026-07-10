@@ -435,6 +435,14 @@ async function authorizeVelPreflightCaller(request: Request, env: Env): Promise<
       headers: { 'Content-Type': 'application/json', ...CORS },
     })
   }
+  const callerKeys = callers.map((caller) => caller.key)
+  const collidesWithMcpAuthority = callerKeys.some((key) => configuredMcpApiKeys(env).includes(key))
+  if (new Set(callerKeys).size !== callers.length || collidesWithMcpAuthority) {
+    return new Response(JSON.stringify({ error: 'Vel preflight caller credential configuration is ambiguous' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
   const provided = authToken(request)
   if (!provided) return unauthorizedResponse()
   const matches = await Promise.all(callers.map((caller) => timingSafeTokenMatch(provided, [caller.key])))

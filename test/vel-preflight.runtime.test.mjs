@@ -18,9 +18,13 @@ function fixtureDb(rows, onQuery = () => {}) {
       onQuery(sql);
       return {
         bind(...types) {
+          const observationCutoff = Number(types.at(-1));
+          const selectedTypes = types.slice(0, -1);
           return {
             async all() {
-              return { results: rows.filter(row => row.type === MARKER || types.includes(row.type)) };
+              return { results: rows.filter(row => row.type === MARKER || (
+                selectedTypes.includes(row.type) && Number(row.start_ts) <= observationCutoff
+              )) };
             },
           };
         },
@@ -141,4 +145,36 @@ test('latest-per-type SQL cannot crowd out a less noisy subjective type', async 
   assert.equal(result.capacity.state, 'available');
   assert.equal(result.capacity.basis_freshness.daily_demands.state, 'fresh');
   assert.ok(result.capacity.pacing.includes('avoid_optional_tasks'));
+});
+
+test('delayed sync ranks and ages subjective capacity by observation time, not receipt time', async () => {
+  const now = Date.parse('2026-07-10T01:00:00.000Z');
+  const database = new DatabaseSync(':memory:');
+  database.exec('CREATE TABLE samples (type TEXT NOT NULL, value REAL, start_ts INTEGER NOT NULL, received_at INTEGER NOT NULL)');
+  const insert = database.prepare('INSERT INTO samples (type,value,start_ts,received_at) VALUES (?,?,?,?)');
+  insert.run('subjective.spoons', 1, now - (30 * 60 * 60 * 1000), now - (60 * 1000));
+  insert.run('subjective.spoons', 8, now - (2 * 60 * 60 * 1000), now - (3 * 60 * 60 * 1000));
+  const result = await buildVelPreflightContext({ PULSESYNC_DB: sqliteD1Adapter(database) }, {
+    verification: 'codex-local-user-session',
+  }, now);
+  database.close();
+  assert.equal(result.freshness.state, 'fresh');
+  assert.equal(result.capacity.state, 'available');
+  assert.equal(result.capacity.basis_freshness.spoons.age_bucket, '1_to_6h');
+  assert.match(source, /ORDER BY start_ts DESC, received_at DESC/);
+});
+
+test('far-future observation clocks are excluded from capacity and cycle context', async () => {
+  const now = Date.parse('2026-07-10T01:00:00.000Z');
+  const result = await buildVelPreflightContext({
+    PULSESYNC_DB: fixtureDb([
+      { type: 'subjective.spoons', value: 1, start_ts: now + (24 * 60 * 60 * 1000), received_at: now - 1000 },
+      { type: 'subjective.cycleDay', value: 2, start_ts: now + (24 * 60 * 60 * 1000), received_at: now - 1000 },
+      { type: MARKER, value: null, start_ts: null, received_at: now - 500 },
+    ]),
+  }, { verification: 'claude-local-user-session', include_cycle: true }, now);
+  assert.equal(result.capacity.state, 'unknown');
+  assert.equal(result.capacity.basis_freshness.spoons.state, 'unavailable');
+  assert.equal(result.optional_context.cycle, 'unavailable');
+  assert.equal(result.optional_context.freshness.state, 'unavailable');
 });
