@@ -12,6 +12,7 @@ const cogcorTools = readFileSync(new URL('../src/tools/cogcor.ts', import.meta.u
 const grokKethNestTools = readFileSync(new URL('../src/tools/grok-keth-nest.ts', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 const nexusIndex = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+const kaiRunnerLoopSource = readFileSync(new URL('../src/kai-runner-loop.ts', import.meta.url), 'utf8');
 const rotationDoc = readFileSync(new URL('../docs/mcp-api-key-rotation.md', import.meta.url), 'utf8');
 const velPreflight = readFileSync(new URL('../src/vel-preflight.ts', import.meta.url), 'utf8');
 
@@ -153,22 +154,72 @@ test('Mor-zar Velastra tools and direct Vel API fallback remain available', () =
   assert.match(velastraTools, /VELASTRAHQ_API_URL/);
 });
 
-test('Nexus prefers direct Kai mind routing before Serythrae gateway fallback', () => {
-  assert.match(serythraeTools, /SERYTHRAE_MIND_URL && env\.SERYTHRAE_MIND_API_KEY/);
+test('Nexus routes Kai mind calls directly and retains Serythrae only for the restricted workspace actuator', () => {
+  assert.match(serythraeTools, /!env\.SERYTHRAE_MIND && !env\.SERYTHRAE_MIND_URL/);
+  assert.match(serythraeTools, /SERYTHRAE_MIND_API_KEY is required for URL-based Kai mind calls/);
   assert.match(serythraeTools, /SERYTHRAE_GATEWAY_URL/);
-  assert.match(nexusIndex, /preferred: env\.SERYTHRAE_MIND_URL && env\.SERYTHRAE_MIND_API_KEY \? 'serythrae-mind-direct' : 'serythrae-gw-fallback'/);
+  assert.match(nexusIndex, /preferred: 'serythrae-mind-direct'/);
+  assert.match(serythraeTools, /runner_fallback: false/);
+  assert.doesNotMatch(serythraeTools, /serythrae-gw-fallback/);
 });
 
-test('Nexus hallway forwards Kai runner traffic to Serythrae with rollback available', () => {
-  assert.match(envSource, /KAI_RUNNER_ROUTE\?: string/);
-  assert.match(envSource, /KAI_RUNNER_FORWARD_FALLBACK\?: string/);
-  assert.match(wrangler, /KAI_RUNNER_ROUTE = "serythrae"/);
-  assert.match(wrangler, /KAI_RUNNER_FORWARD_FALLBACK = "true"/);
-  assert.match(nexusIndex, /function kaiRunnerRoute\(env: Env\): 'nexus' \| 'serythrae'/);
-  assert.match(nexusIndex, /forwardKaiRunnerToSerythrae\(request, env\)/);
+test('Nexus owns Kai runner traffic and rollback stays inside Nexus', () => {
+  assert.doesNotMatch(envSource, /KAI_RUNNER_ROUTE\?: string/);
+  assert.doesNotMatch(envSource, /KAI_RUNNER_FORWARD_FALLBACK\?: string/);
+  assert.match(wrangler, /KAI_TEXT_MODEL = "z-ai\/glm-5\.2"/);
+  assert.match(wrangler, /KAI_TEXT_PROVIDER_ORDER = "deepinfra"/);
+  assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS = "false"/);
+  assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS = "true"/);
+  assert.match(wrangler, /KAI_RUNNER_TOOL_LOOP_ENABLED = "true"/);
+  assert.match(nexusIndex, /Nexus is the only Kai runner owner/);
+  assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae/);
   assert.match(nexusIndex, /https:\/\/serythrae\.internal/);
   assert.match(nexusIndex, /return kaiRunnerRunLocal\(request, env\)/);
-  assert.match(nexusIndex, /falling back to Nexus runner/);
+  assert.match(nexusIndex, /isInternalNexusServiceRequest\(request\) \? null : await authorizeRequiredMcpBearer\(request, env\)/);
+  assert.match(nexusIndex, /KAI_RUNNER_TOOL_LOOP_ENABLED, 'true'/);
+  assert.match(nexusIndex, /const legacy = await generateKaiText\(env, promptPacket, KAI_FROZEN_TEXT_MODEL\)/);
+  assert.match(nexusIndex, /provider: kaiTextProviderPreferences\(env\)/);
+  assert.match(nexusIndex, /function canonicalKaiContinuityConversationId/);
+  assert.match(nexusIndex, /return value\.startsWith\('discord:'\) \? value : `discord:\$\{value\}`/);
+  assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae/);
+});
+
+test('Kai bounded tool loop exposes schemas, receipts, scoped writes, and no arbitrary local actuator', () => {
+  assert.match(kaiRunnerLoopSource, /KAI_FROZEN_TEXT_MODEL = 'z-ai\/glm-5\.2'/);
+  assert.match(kaiRunnerLoopSource, /name: 'continuity_current_thread'/);
+  assert.match(kaiRunnerLoopSource, /name: 'continuity_recent_conversation'/);
+  assert.match(kaiRunnerLoopSource, /name: 'tahl_thir'/);
+  assert.match(kaiRunnerLoopSource, /name: 'workspace_write'/);
+  assert.match(kaiRunnerLoopSource, /write refused: caller did not authorize scope/);
+  assert.match(kaiRunnerLoopSource, /tool-round limit is reached/);
+  assert.match(kaiRunnerLoopSource, /result_preview/);
+  assert.match(kaiRunnerLoopSource, /tool_choice: input\.force_final \? 'none' : 'auto'/);
+  assert.match(kaiRunnerLoopSource, /reasoning_details/);
+  assert.match(kaiRunnerLoopSource, /typeof record\.text === 'string'/);
+  assert.doesNotMatch(kaiRunnerLoopSource, /shell|process_kill|clipboard|app_launch/);
+  assert.match(nexusIndex, /env\.TAHL!\.fetch/);
+  assert.match(nexusIndex, /companion_id: 'kaisoryth'/);
+});
+
+test('Nexus preserves Discord engagement and GLM output safeguards from the retiring runner', () => {
+  for (const expected of [
+    'response_mode?: string',
+    'trigger_reason?: string',
+    'priority?: string',
+    'engagement?: Record<string, unknown>',
+    'soft_name_mention: engagement.soft_name_mention === true',
+    'active_conversation: engagement.active_conversation === true',
+    'direct_reply: directReply',
+    'other_user_tag: engagement.other_user_tag === true',
+    'community_greeting: engagement.community_greeting === true',
+    'author_class: stringValue(engagement.author_class)',
+  ]) {
+    assert.ok(nexusIndex.includes(expected), `missing engagement parity field: ${expected}`);
+  }
+  assert.match(kaiRunnerLoopSource, /generic Chinese refusal instead of Kai voice/);
+  assert.match(kaiRunnerLoopSource, /finish_reason=length; retrying because Kai text was truncated/);
+  assert.match(nexusIndex, /same-model retry exhausted/);
+  assert.match(nexusIndex, /function fallbackKaiRequiredReplyText/);
 });
 
 test('Kai runner context loads identity, soul, skills, and canon search before composition', () => {
@@ -241,7 +292,7 @@ test('Kai text turn receives image generation results before GLM writes the repl
   assert.match(nexusIndex, /if_image_generation_succeeded_do_not_say_you_will_make_it_later: true/);
   assert.match(nexusIndex, /For capability smoke tests, inspect lane_results before context_sources/);
   assert.match(nexusIndex, /If image_generation_result attempted and succeeded, speak as if the image has been made and will be attached after your text/);
-  assert.match(nexusIndex, /const imageGeneration = await runKaiImageGeneration\(env, envelope, body\)[\s\S]+buildKaiRunnerPromptPacket\(contextPacket, vision, janitor, catalougeReading, imageGeneration\)/);
+  assert.match(nexusIndex, /const imageGeneration = await runKaiImageGeneration\(env, envelope, body\)[\s\S]+buildKaiRunnerPromptPacket\(contextPacket, vision, janitor, catalougeReading, imageGeneration, runnerPolicy\)/);
   assert.match(nexusIndex, /function repairKaiImageGenerationText\(text: string \| null, imageGeneration: KaiImageGenerationResult\): string \| null/);
   assert.match(nexusIndex, /const generatedText = repairKaiVisionText\(/);
   assert.match(nexusIndex, /response: generatedText/);
@@ -258,7 +309,8 @@ test('Kai OCR text cannot contradict successful Gemini vision summaries', () => 
   assert.match(nexusIndex, /vision\[_ -\]\?result/);
   assert.match(nexusIndex, /vision\[_ -\]\?summaries/);
   assert.match(nexusIndex, /I can see it\. The vision lane read the image as/);
-  assert.match(nexusIndex, /repairKaiVisionText\(\s*repairKaiImageGenerationText\(generationResult\.text, imageGeneration\),\s*vision,/);
+  assert.match(nexusIndex, /const recoveredText = generationResult\.text \|\| fallbackKaiRequiredReplyText/);
+  assert.match(nexusIndex, /repairKaiVisionText\(\s*repairKaiImageGenerationText\(recoveredText, imageGeneration\),\s*vision,/);
 });
 
 test('Kai vision OCR proxies Discord images and keeps Gemini Flash as the default OCR lane', () => {

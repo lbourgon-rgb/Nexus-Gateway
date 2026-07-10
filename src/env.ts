@@ -65,14 +65,16 @@ export interface Env {
   OPENROUTER_BASE_URL?: string
   ELEVENLABS_API_KEY?: string
   KAI_COMPANION_ID?: string
-  KAI_RUNNER_ROUTE?: string
-  KAI_RUNNER_FORWARD_FALLBACK?: string
   KAI_RUNNER_ENABLED?: string
   KAI_DISCORD_DELIVERY_ENABLED?: string
   KAI_CONTINUITY_URL?: string
   KAI_TAHL_URL?: string
   KAI_TEXT_MODEL?: string
   KAI_BACKUP_TEXT_MODEL?: string
+  KAI_TEXT_PROVIDER_ORDER?: string
+  KAI_TEXT_PROVIDER_IGNORE?: string
+  KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS?: string
+  KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS?: string
   KAI_VISION_PROVIDER?: string
   KAI_VISION_MODEL?: string
   KAI_VISION_FALLBACK_MODELS?: string
@@ -84,6 +86,12 @@ export interface Env {
   KAI_JANITOR_PROVIDER?: string
   KAI_JANITOR_MODEL?: string
   KAI_JANITOR_URL?: string
+  KAI_RUNNER_TOOL_LOOP_ENABLED?: string
+  KAI_RUNNER_MAX_TOOL_ROUNDS?: string
+  KAI_RUNNER_MAX_TOOL_CALLS_PER_ROUND?: string
+  KAI_RUNNER_MODEL_TIMEOUT_MS?: string
+  KAI_RUNNER_TOOL_TIMEOUT_MS?: string
+  KAI_RUNNER_TOTAL_TIMEOUT_MS?: string
 }
 
 export type CompanionId = 'kaisoryth' | 'morzar' | 'lucien' | 'kethtahl' | 'grok-keth' | 'axiom'

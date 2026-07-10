@@ -6,10 +6,19 @@ import { proxyMcp, proxyRest } from '../proxy'
 const KAI_ONLY = 'kaisoryth'
 
 function serythraeMcp(env: Env, toolName: string, args: Record<string, unknown>) {
-  if (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY) {
-    return proxyMcp(env.SERYTHRAE_MIND_URL, toolName, args, env.SERYTHRAE_MIND_API_KEY, env.SERYTHRAE_MIND)
+  if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_URL) {
+    return { content: [{ type: 'text' as const, text: 'Direct Serythrae mind binding or URL is not configured.' }] }
   }
-  return proxyMcp(env.SERYTHRAE_GATEWAY_URL, toolName, args, env.SERYTHRAE_GATEWAY_API_KEY, env.SERYTHRAE_GATEWAY)
+  if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_API_KEY) {
+    return { content: [{ type: 'text' as const, text: 'SERYTHRAE_MIND_API_KEY is required for URL-based Kai mind calls.' }] }
+  }
+  return proxyMcp(
+    env.SERYTHRAE_MIND_URL || 'https://serythrae-mind.internal',
+    toolName,
+    args,
+    env.SERYTHRAE_MIND_API_KEY,
+    env.SERYTHRAE_MIND,
+  )
 }
 
 function serythraeGatewayRest(env: Env, path: string, body: Record<string, unknown> = {}, method = 'POST') {
@@ -23,19 +32,20 @@ function serythraeGatewayRest(env: Env, path: string, body: Record<string, unkno
 
 export function registerSerythraeTools(server: McpServer, env: Env) {
   server.tool('serythrae_status', 'Read Serythrae gateway health for Kai/NESTeq routing.', {}, async () => {
-    const direct = env.SERYTHRAE_MIND_URL
-      ? await proxyRest(`${env.SERYTHRAE_MIND_URL.replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_MIND)
-      : { content: [{ type: 'text' as const, text: 'Direct Serythrae mind URL is not configured.' }] }
-    const gateway = env.SERYTHRAE_GATEWAY_URL
-      ? await proxyRest(`${env.SERYTHRAE_GATEWAY_URL.replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_GATEWAY)
-      : { content: [{ type: 'text' as const, text: 'Serythrae gateway fallback URL is not configured.' }] }
+    const direct = env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND
+      ? await proxyRest(`${(env.SERYTHRAE_MIND_URL || 'https://serythrae-mind.internal').replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_MIND)
+      : { content: [{ type: 'text' as const, text: 'Direct Serythrae mind binding or URL is not configured.' }] }
+    const workspaceActuator = env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY
+      ? await proxyRest(`${(env.SERYTHRAE_GATEWAY_URL || 'https://serythrae.internal').replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_GATEWAY)
+      : { content: [{ type: 'text' as const, text: 'Restricted workspace actuator is not configured.' }] }
     return {
       content: [{
         type: 'text' as const,
         text: JSON.stringify({
-          preferred_backend: env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY ? 'serythrae-mind-direct' : 'serythrae-gw-fallback',
+          preferred_backend: 'serythrae-mind-direct',
           direct_mind: direct.content[0]?.text,
-          gateway_fallback: gateway.content[0]?.text,
+          runner_fallback: false,
+          workspace_actuator: workspaceActuator.content[0]?.text,
         }, null, 2),
       }],
     }

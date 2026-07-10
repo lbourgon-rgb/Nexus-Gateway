@@ -18,6 +18,23 @@ import { registerGrokKethNestTools } from './tools/grok-keth-nest'
 import { registerVelastraHQTools } from './tools/velastrahq'
 import { buildVelPreflightContext, type VelAuthorVerification } from './vel-preflight'
 import { registerTahlTools } from './tools/tahl'
+import {
+  KAI_FROZEN_TEXT_MODEL,
+  KAI_RUNNER_TOOL_SPECS,
+  createKaiAttemptBudget,
+  kaiOpenRouterToolRequestBody,
+  kaiToolExecutionFromResult,
+  normalizeKaiRunnerPolicy,
+  runKaiRunnerToolLoop,
+  unusableKaiModelTurnReason,
+  type KaiRunnerLoopResult,
+  type KaiRunnerModelMessage,
+  type KaiRunnerModelTurn,
+  type KaiRunnerPolicy,
+  type KaiRunnerToolExecution,
+  type KaiRunnerToolReceipt,
+  type KaiRunnerToolSpec,
+} from './kai-runner-loop'
 import { proxyMcp } from './proxy'
 
 export class NexusGateway extends McpAgent<Env> {
@@ -158,6 +175,10 @@ interface KaiDiscordEnvelope {
   recent_context?: string
   mentions?: string[]
   attachments: KaiRunnerAttachment[]
+  response_mode?: string
+  trigger_reason?: string
+  priority?: string
+  engagement?: Record<string, unknown>
   trigger?: 'listener' | 'mention' | 'manual' | 'preview' | 'unknown'
 }
 
@@ -193,9 +214,10 @@ interface KaiRunnerResult {
   janitor: KaiJanitorResult
   catalouge_reading: KaiCatalougeReadingResult
   generation: KaiTextGenerationResult
+  tool_loop: KaiRunnerLoopResult | null
   allowed_tools: string[]
-  tool_calls: Array<Record<string, unknown>>
-  memory_writes: Array<Record<string, unknown>>
+  tool_calls: Array<Record<string, unknown> | KaiRunnerToolReceipt>
+  memory_writes: KaiRunnerToolReceipt[]
 }
 
 interface KaiVisionSummary {
@@ -264,6 +286,16 @@ interface KaiTextGenerationResult {
   model: string | null
   ok: boolean
   error?: string
+  finish_reason?: string | null
+  refusal?: string
+  choice_message_keys?: string[]
+  attempts?: Array<{
+    ok: boolean
+    finish_reason?: string | null
+    refusal?: string
+    choice_message_keys?: string[]
+    error?: string
+  }>
   usage?: unknown
 }
 
@@ -287,34 +319,7 @@ interface KaiJanitorResult {
   retries?: number
 }
 
-const KAI_RUNNER_TOOL_ALLOWLIST = [
-  'kaisoryth_context_surface',
-  'kaisoryth_memory_search',
-  'kaisoryth_recent_feelings',
-  'kaisoryth_identity_read',
-  'kaisoryth_eq_state',
-  'kaisoryth_last_write',
-  'kaisoryth_threads_active',
-  'kaisoryth_nestsoul_read',
-  'kaisoryth_home_read',
-  'kaisoryth_love_letters',
-  'social_graph_lookup',
-  'social_graph_upsert_person',
-  'social_graph_add_fact',
-  'social_graph_recent',
-  'social_graph_log_miss',
-  'social_engagement_decide',
-  'kai_image_reference_store',
-  'kai_image_reference_list',
-  'kai_image_asset_store',
-  'catalouge_list_books',
-  'catalouge_search_books',
-  'catalouge_get_book',
-  'catalouge_get_progress',
-  'catalouge_get_annotations',
-  'catalouge_next_read_session',
-  'catalouge_checkpoint_read_session',
-] as const
+const KAI_RUNNER_TOOL_ALLOWLIST = KAI_RUNNER_TOOL_SPECS.map((spec) => spec.name)
 
 interface KaiCatalougeReadingResult {
   attempted: boolean
@@ -454,15 +459,6 @@ function isInternalNexusServiceRequest(request: Request): boolean {
   return new URL(request.url).hostname === 'nexus.internal'
 }
 
-function kaiRunnerRoute(env: Env): 'nexus' | 'serythrae' {
-  const route = envText(env.KAI_RUNNER_ROUTE, 'nexus')
-  return route === 'serythrae' || route === 'serythrae-gw' ? 'serythrae' : 'nexus'
-}
-
-function kaiRunnerForwardFallbackEnabled(env: Env): boolean {
-  return envText(env.KAI_RUNNER_FORWARD_FALLBACK, 'true').toLowerCase() !== 'false'
-}
-
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
@@ -489,6 +485,17 @@ function envPresent(value: unknown): boolean {
 function envProviderEnabled(value: unknown): boolean {
   const provider = envChoice(value, 'disabled')
   return Boolean(provider && provider !== 'disabled')
+}
+
+function kaiTextProviderPreferences(env: Env): Record<string, unknown> {
+  const order = csvStringList(envText(env.KAI_TEXT_PROVIDER_ORDER, 'deepinfra'))
+  const ignore = csvStringList(envText(env.KAI_TEXT_PROVIDER_IGNORE, 'morph'))
+  return {
+    ...(order.length ? { order } : {}),
+    ...(ignore.length ? { ignore } : {}),
+    allow_fallbacks: envText(env.KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS, 'false').toLowerCase() === 'true',
+    require_parameters: envText(env.KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS, 'true').toLowerCase() !== 'false',
+  }
 }
 
 function numberValue(value: unknown): number | undefined {
@@ -539,6 +546,7 @@ function normalizeKaiRunnerEnvelope(body: Record<string, unknown>): KaiDiscordEn
     ? body.envelope as Record<string, unknown>
     : body
   const trigger = stringValue(source.trigger) || stringValue(body.trigger) || 'unknown'
+  const engagement = recordValue(source.engagement || body.engagement)
   return {
     guild_id: stringValue(source.guild_id) || stringValue(source.guildId) || stringValue(body.guild_id),
     channel_id: stringValue(source.channel_id) || stringValue(source.channelId) || stringValue(body.channel_id) || stringValue(body.channel),
@@ -551,6 +559,10 @@ function normalizeKaiRunnerEnvelope(body: Record<string, unknown>): KaiDiscordEn
     recent_context: stringValue(source.recent_context) || stringValue(source.recentContext) || stringValue(body.recent_context) || stringValue(body.recentContext),
     mentions: stringList(source.mentions).length ? stringList(source.mentions) : stringList(body.mentions),
     attachments: normalizeKaiAttachments(source.attachments || body.attachments),
+    response_mode: stringValue(source.response_mode) || stringValue(source.responseMode) || stringValue(body.response_mode) || stringValue(body.responseMode),
+    trigger_reason: stringValue(source.trigger_reason) || stringValue(source.triggerReason) || stringValue(body.trigger_reason) || stringValue(body.triggerReason),
+    priority: stringValue(source.priority) || stringValue(body.priority),
+    engagement: Object.keys(engagement).length ? engagement : undefined,
     trigger: trigger === 'listener' || trigger === 'mention' || trigger === 'manual' || trigger === 'preview' ? trigger : 'unknown',
   }
 }
@@ -558,9 +570,12 @@ function normalizeKaiRunnerEnvelope(body: Record<string, unknown>): KaiDiscordEn
 function kaiRunnerModelLanes(env: Env): Record<string, unknown> {
   return {
     text: {
-      configured: envPresent(env.KAI_TEXT_MODEL),
-      model: envText(env.KAI_TEXT_MODEL) || null,
-      backup_model: envText(env.KAI_BACKUP_TEXT_MODEL) || null,
+      configured: envPresent(env.OPENROUTER_API_KEY),
+      model: KAI_FROZEN_TEXT_MODEL,
+      frozen: true,
+      rollback_mode: envText(env.KAI_RUNNER_TOOL_LOOP_ENABLED, 'true').toLowerCase() === 'false'
+        ? 'nexus-prefetch-only'
+        : 'nexus-bounded-tool-loop',
     },
     vision: {
       configured: envProviderEnabled(env.KAI_VISION_PROVIDER) && kaiVisionModels(env).length > 0,
@@ -612,13 +627,22 @@ async function callJsonTool(baseUrl: string | undefined, apiKey: string | undefi
   return response.ok ? data : { ok: false, status: response.status, body: text.slice(0, 500) }
 }
 
-async function callKaiMindTool(env: Env, tool: string, args: Record<string, unknown>) {
-  if (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY) {
-    const result = await proxyMcp(env.SERYTHRAE_MIND_URL, tool, args, env.SERYTHRAE_MIND_API_KEY, env.SERYTHRAE_MIND)
-    return { source: 'serythrae-mind-direct', result }
+async function callKaiMindTool(env: Env, tool: string, args: Record<string, unknown>, signal?: AbortSignal) {
+  if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_URL) {
+    throw new Error('SERYTHRAE_MIND service binding or URL is not configured')
   }
-  const result = await callJsonTool(env.SERYTHRAE_GATEWAY_URL, env.SERYTHRAE_GATEWAY_API_KEY, tool, args, env.SERYTHRAE_GATEWAY)
-  return { source: 'serythrae-gw-fallback', result }
+  if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_API_KEY) {
+    throw new Error('SERYTHRAE_MIND_API_KEY is required for URL-based Kai mind calls')
+  }
+  const result = await proxyMcp(
+    env.SERYTHRAE_MIND_URL || 'https://serythrae-mind.internal',
+    tool,
+    args,
+    env.SERYTHRAE_MIND_API_KEY,
+    env.SERYTHRAE_MIND,
+    signal,
+  )
+  return { source: 'serythrae-mind-direct', result }
 }
 
 async function callContinuityJson(env: Env, path: string): Promise<unknown> {
@@ -1198,6 +1222,7 @@ function buildKaiRunnerPromptPacket(
   janitor?: KaiJanitorResult,
   catalougeReading?: KaiCatalougeReadingResult,
   imageGeneration?: KaiImageGenerationResult,
+  runnerPolicy?: KaiRunnerPolicy,
 ): Record<string, unknown> {
   return {
     companion_id: contextPacket.companion_id,
@@ -1208,6 +1233,8 @@ function buildKaiRunnerPromptPacket(
       forbidden_routes: ['old Haven/Serythrae/NESTchat live runner loop', 'serythrae-gw chat runner'],
       newest_user_message_priority: true,
       delivery_gate_required: true,
+      runner_owner: 'nexus',
+      model: KAI_FROZEN_TEXT_MODEL,
     },
     current_turn: {
       guild_id: contextPacket.envelope.guild_id || null,
@@ -1218,6 +1245,10 @@ function buildKaiRunnerPromptPacket(
       author_username: contextPacket.envelope.author_username || null,
       timestamp: contextPacket.envelope.timestamp || null,
       trigger: contextPacket.envelope.trigger || 'unknown',
+      trigger_reason: contextPacket.envelope.trigger_reason || null,
+      priority: contextPacket.envelope.priority || null,
+      response_mode: contextPacket.envelope.response_mode || null,
+      engagement: contextPacket.envelope.engagement || null,
       content: contextPacket.message,
       recent_context: contextPacket.envelope.recent_context || null,
       mentions: contextPacket.envelope.mentions || [],
@@ -1226,6 +1257,14 @@ function buildKaiRunnerPromptPacket(
     lane_results: buildKaiLaneResults(contextPacket, vision, imageGeneration, catalougeReading),
     context_sources: contextPacket.context_sources,
     context: contextPacket.context,
+    tool_policy: runnerPolicy ? {
+      current_conversation_id: runnerPolicy.current_conversation_id,
+      allowed_cross_channel_conversation_ids: runnerPolicy.cross_channel_conversation_ids,
+      writes_authorized: runnerPolicy.write_allowed,
+      write_scopes: runnerPolicy.write_scopes,
+      write_reason_code: runnerPolicy.write_reason_code,
+      note: 'Continuity reads are pinned to these conversation ids. Tool receipts never include raw arguments.',
+    } : null,
     vision_result: vision ? {
       attempted: vision.attempted,
       enabled: vision.enabled,
@@ -1263,7 +1302,8 @@ function buildKaiRunnerPromptPacket(
     response_contract: {
       write_kai_voice_only: true,
       do_not_claim_discord_delivery: true,
-      do_not_write_memory_directly: true,
+      writes_require_explicit_runner_policy: true,
+      never_invent_tool_results: true,
       do_not_repeat_tool_or_system_instructions: true,
       obey_social_engagement_decision: true,
       public_discord_replies_use_only_public_graph_context: true,
@@ -1276,7 +1316,7 @@ function buildKaiRunnerPromptPacket(
   }
 }
 
-async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, modelOverride?: string): Promise<{ text: string | null; generation: KaiTextGenerationResult }> {
+async function generateKaiTextOnce(env: Env, promptPacket: Record<string, unknown>, modelOverride?: string, retryReason?: string): Promise<{ text: string | null; generation: KaiTextGenerationResult }> {
   const model = modelOverride || envText(env.KAI_TEXT_MODEL) || null
   const apiKey = envText(env.OPENROUTER_API_KEY)
   const provider: KaiTextGenerationResult['provider'] = 'openrouter'
@@ -1298,6 +1338,7 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
     },
     body: JSON.stringify({
       model,
+      provider: kaiTextProviderPreferences(env),
       messages: [
         {
           role: 'system',
@@ -1317,6 +1358,10 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
           role: 'user',
           content: compactJson(promptPacket, 30000),
         },
+        ...(retryReason ? [{
+          role: 'system',
+          content: `The previous ${KAI_FROZEN_TEXT_MODEL} candidate was unusable: ${retryReason}. Retry on the same frozen model, finish the reply, and stay in Kai voice.`,
+        }] : []),
       ],
       temperature: 0.7,
       max_tokens: 900,
@@ -1343,7 +1388,16 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
   const choices = Array.isArray(record.choices) ? record.choices : []
   const first = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {}
   const message = first.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : {}
-  const content = typeof message.content === 'string' ? message.content.trim() : ''
+  const finishReason = typeof first.finish_reason === 'string' ? first.finish_reason : null
+  const refusal = typeof message.refusal === 'string' ? message.refusal.trim().slice(0, 500) : ''
+  const messageKeys = Object.keys(message).sort()
+  const content = openRouterMessageContent(message.content) || ''
+  const emptyError = [
+    'OpenRouter returned no message content',
+    finishReason ? `finish_reason=${finishReason}` : '',
+    refusal ? `refusal=${refusal}` : '',
+    messageKeys.length ? `message_keys=${messageKeys.join(',')}` : '',
+  ].filter(Boolean).join('; ')
   return {
     text: content || null,
     generation: {
@@ -1351,9 +1405,572 @@ async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, 
       provider,
       model,
       ok: Boolean(content),
-      ...(content ? {} : { error: 'OpenRouter returned no message content' }),
+      ...(content ? {} : { error: emptyError }),
+      finish_reason: finishReason,
+      ...(refusal ? { refusal } : {}),
+      choice_message_keys: messageKeys,
       usage: record.usage,
     },
+  }
+}
+
+function canonicalKaiContinuityConversationId(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  return value.startsWith('discord:') ? value : `discord:${value}`
+}
+
+function envInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(envText(value, String(fallback)))
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, Math.trunc(parsed)))
+}
+
+async function withAbortTimeout<T>(timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort('timeout'), Math.max(1, timeoutMs))
+  try {
+    return await operation(controller.signal)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function openRouterMessageContent(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null
+  if (!Array.isArray(value)) return null
+  const text = value
+    .map((part) => {
+      if (!part || typeof part !== 'object' || Array.isArray(part)) return ''
+      const item = part as Record<string, unknown>
+      return item.type === 'text' && typeof item.text === 'string' ? item.text : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+  return text || null
+}
+
+async function callOpenRouterToolTurnOnce(
+  env: Env,
+  input: {
+    model: string
+    messages: KaiRunnerModelMessage[]
+    tools: Array<Record<string, unknown>>
+    force_final: boolean
+    timeout_ms: number
+  },
+): Promise<KaiRunnerModelTurn> {
+  const apiKey = envText(env.OPENROUTER_API_KEY)
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY is not configured')
+  if (input.model !== KAI_FROZEN_TEXT_MODEL) {
+    throw new Error(`Kai runner model is frozen to ${KAI_FROZEN_TEXT_MODEL}`)
+  }
+  const baseUrl = (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')
+  const response = await withAbortTimeout(input.timeout_ms, (signal) => fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    signal,
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://nexus.lbourgon.workers.dev',
+      'X-OpenRouter-Title': 'Nexus Kai Canonical Runner',
+    },
+    body: JSON.stringify(kaiOpenRouterToolRequestBody(input, kaiTextProviderPreferences(env))),
+  }))
+  const text = await response.text()
+  let data: unknown = text
+  try {
+    data = JSON.parse(text)
+  } catch {}
+  if (!response.ok) {
+    throw new Error(`OpenRouter ${response.status}: ${typeof data === 'string' ? data.slice(0, 500) : compactJson(data, 500)}`)
+  }
+  const record = recordValue(data)
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  const first = recordValue(choices[0])
+  const message = recordValue(first.message)
+  const finishReason = typeof first.finish_reason === 'string' ? first.finish_reason : null
+  const refusal = typeof message.refusal === 'string' ? message.refusal.trim().slice(0, 500) : ''
+  const messageKeys = Object.keys(message).sort()
+  const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
+  const toolCalls = rawCalls
+    .map((raw, index) => {
+      const call = recordValue(raw)
+      const fn = recordValue(call.function)
+      const name = stringValue(fn.name)
+      if (!name) return null
+      const rawArguments = typeof fn.arguments === 'string'
+        ? fn.arguments
+        : JSON.stringify(recordValue(fn.arguments))
+      return {
+        id: stringValue(call.id) || `kai-tool-call-${index + 1}`,
+        name,
+        arguments: rawArguments,
+      }
+    })
+    .filter((call): call is { id: string; name: string; arguments: string } => Boolean(call))
+  return {
+    content: openRouterMessageContent(message.content),
+    tool_calls: toolCalls,
+    finish_reason: finishReason,
+    ...(refusal ? { refusal } : {}),
+    message_keys: messageKeys,
+    ...(Array.isArray(message.reasoning_details) ? { reasoning_details: message.reasoning_details } : {}),
+    ...(typeof message.reasoning === 'string' && message.reasoning.trim() ? { reasoning: message.reasoning } : {}),
+    usage: record.usage,
+  }
+}
+
+async function generateKaiText(env: Env, promptPacket: Record<string, unknown>, modelOverride?: string): Promise<{ text: string | null; generation: KaiTextGenerationResult }> {
+  const attempts: NonNullable<KaiTextGenerationResult['attempts']> = []
+  let retryReason: string | undefined
+  let last: { text: string | null; generation: KaiTextGenerationResult } | null = null
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const result = await generateKaiTextOnce(env, promptPacket, modelOverride, retryReason)
+    last = result
+    const hasChoiceDiagnostics = result.generation.choice_message_keys !== undefined
+      || result.generation.finish_reason !== undefined
+      || Boolean(result.generation.refusal)
+    if (!hasChoiceDiagnostics) return result
+    const unusable = unusableKaiModelTurnReason({
+      content: result.text,
+      tool_calls: [],
+      finish_reason: result.generation.finish_reason,
+      refusal: result.generation.refusal,
+      message_keys: result.generation.choice_message_keys,
+    })
+    const generation = unusable
+      ? { ...result.generation, ok: false, error: unusable }
+      : result.generation
+    attempts.push({
+      ok: generation.ok,
+      finish_reason: generation.finish_reason,
+      ...(generation.refusal ? { refusal: generation.refusal } : {}),
+      ...(generation.choice_message_keys ? { choice_message_keys: generation.choice_message_keys } : {}),
+      ...(generation.error ? { error: generation.error } : {}),
+    })
+    if (!unusable) {
+      return {
+        text: result.text,
+        generation: attempts.length > 1 ? { ...generation, attempts } : generation,
+      }
+    }
+    retryReason = unusable
+    last = { text: null, generation }
+  }
+  const failed = last || {
+    text: null,
+    generation: { attempted: false, provider: 'openrouter' as const, model: modelOverride || null, ok: false, error: 'No Kai text generation attempt completed' },
+  }
+  return { ...failed, generation: { ...failed.generation, attempts } }
+}
+
+async function callOpenRouterToolTurn(
+  env: Env,
+  input: {
+    model: string
+    messages: KaiRunnerModelMessage[]
+    tools: Array<Record<string, unknown>>
+    force_final: boolean
+    timeout_ms: number
+  },
+): Promise<KaiRunnerModelTurn> {
+  const diagnostics: NonNullable<KaiRunnerModelTurn['diagnostics']> = []
+  let messages = input.messages
+  const remainingAttemptBudget = createKaiAttemptBudget(input.timeout_ms)
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const timeoutMs = remainingAttemptBudget()
+    if (timeoutMs <= 0) throw new Error('Kai same-model retry budget exhausted before another model request')
+    const turn = await callOpenRouterToolTurnOnce(env, { ...input, messages, timeout_ms: timeoutMs })
+    const unusable = unusableKaiModelTurnReason(turn)
+    diagnostics.push({
+      finish_reason: turn.finish_reason || null,
+      ...(turn.refusal ? { refusal: turn.refusal } : {}),
+      message_keys: turn.message_keys || [],
+      ...(unusable ? { error: unusable } : {}),
+    })
+    if (!unusable) return { ...turn, diagnostics }
+    if (attempt === 2) throw new Error(`${unusable}; same-model retry exhausted`)
+    messages = [
+      ...input.messages,
+      {
+        role: 'system',
+        content: `The previous ${KAI_FROZEN_TEXT_MODEL} candidate was unusable: ${unusable}. Retry on the same model. Preserve Kai voice, finish the reply, and use tools only if still necessary.`,
+      },
+    ]
+  }
+  throw new Error('Kai same-model retry exhausted')
+}
+
+function boundedString(value: unknown, maxChars: number): string | undefined {
+  return typeof value === 'string' && value.trim()
+    ? value.trim().slice(0, maxChars)
+    : undefined
+}
+
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, Math.trunc(parsed)))
+}
+
+function compactContinuityEvents(value: unknown, expectedConversationId: string, limit: number): Record<string, unknown> {
+  const root = recordValue(value)
+  const events = Array.isArray(root.events) ? root.events : []
+  return {
+    conversation_id: expectedConversationId,
+    count: Math.min(events.length, limit),
+    events: events
+      .map((item) => recordValue(item))
+      .filter((event) => String(event.conversation_id || '') === expectedConversationId)
+      .slice(0, limit)
+      .map((event) => ({
+        id: boundedString(event.id, 128) || null,
+        source: boundedString(event.source, 32) || null,
+        role: boundedString(event.role, 24) || null,
+        created_at: boundedString(event.created_at, 64) || null,
+        reply_to: boundedString(event.reply_to, 128) || null,
+        content: boundedString(event.content, 600) || '',
+      })),
+    privacy: {
+      raw_omitted: true,
+      metadata_omitted: true,
+      author_details_omitted: true,
+      bounded_content_chars: 600,
+    },
+  }
+}
+
+async function callContinuityConversation(
+  env: Env,
+  conversationId: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<unknown> {
+  if (!env.CONTINUITY && !env.CONTINUITY_URL) {
+    throw new Error('CONTINUITY service binding or URL is not configured')
+  }
+  const base = (env.CONTINUITY_URL || 'https://continuity-worker.internal').replace(/\/+$/, '')
+  const params = new URLSearchParams({
+    companion_id: 'kaisoryth',
+    conversation_id: conversationId,
+    limit: String(limit),
+  })
+  const headers = new Headers({ Accept: 'application/json' })
+  if (env.CONTINUITY_API_KEY) headers.set('Authorization', `Bearer ${env.CONTINUITY_API_KEY}`)
+  const response = await withAbortTimeout(timeoutMs, async (signal) => {
+    const request = new Request(`${base}/events?${params}`, { method: 'GET', headers, signal })
+    return env.CONTINUITY ? env.CONTINUITY.fetch(request) : fetch(request)
+  })
+  const text = await response.text()
+  let payload: unknown = text
+  try {
+    payload = JSON.parse(text)
+  } catch {}
+  if (!response.ok) throw new Error(`Continuity ${response.status}: ${typeof payload === 'string' ? payload.slice(0, 500) : compactJson(payload, 500)}`)
+  return compactContinuityEvents(payload, conversationId, limit)
+}
+
+async function callTahlRunnerTool(
+  env: Env,
+  name: 'tahl_status' | 'tahl_thir_recent' | 'tahl_thir',
+  args: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<unknown> {
+  if (!env.TAHL) throw new Error('TAHL service binding is not configured')
+  const response = await withAbortTimeout(timeoutMs, (signal) => env.TAHL!.fetch(new Request('https://tahl.internal/mcp', {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: crypto.randomUUID(),
+      method: 'tools/call',
+      params: {
+        name,
+        arguments: { ...args, companion_id: 'kaisoryth' },
+      },
+    }),
+  })))
+  const text = await response.text()
+  let payload: unknown = text
+  try {
+    payload = JSON.parse(text)
+  } catch {}
+  if (!response.ok) throw new Error(`Tahl ${response.status}: ${typeof payload === 'string' ? payload.slice(0, 500) : compactJson(payload, 500)}`)
+  return truncateKaiContext(payload, 8000)
+}
+
+async function callWorkspaceRunnerTool(
+  env: Env,
+  action: 'list' | 'read' | 'search' | 'write' | 'edit',
+  args: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<unknown> {
+  if (!env.SERYTHRAE_GATEWAY && !env.SERYTHRAE_GATEWAY_URL) {
+    throw new Error('restricted Kai workspace actuator is not configured')
+  }
+  const base = (env.SERYTHRAE_GATEWAY ? 'https://serythrae.internal' : env.SERYTHRAE_GATEWAY_URL || '').replace(/\/+$/, '')
+  const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' })
+  if (!env.SERYTHRAE_GATEWAY && env.SERYTHRAE_GATEWAY_API_KEY) {
+    headers.set('Authorization', `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}`)
+  }
+  const response = await withAbortTimeout(timeoutMs, async (signal) => {
+    const request = new Request(`${base}/api/kaisoryth/workspace/tool`, {
+      method: 'POST',
+      headers,
+      signal,
+      redirect: 'manual',
+      body: JSON.stringify({ ...args, action }),
+    })
+    return env.SERYTHRAE_GATEWAY ? env.SERYTHRAE_GATEWAY.fetch(request) : fetch(request)
+  })
+  const text = await response.text()
+  let payload: unknown = text
+  try {
+    payload = JSON.parse(text)
+  } catch {}
+  if (!response.ok) throw new Error(`restricted workspace ${response.status}: ${typeof payload === 'string' ? payload.slice(0, 500) : compactJson(payload, 500)}`)
+  return truncateKaiContext(payload, 8000)
+}
+
+function publicSocialArgs(envelope: KaiDiscordEnvelope, args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...args,
+    companion_id: 'kaisoryth',
+    guild_id: envelope.guild_id,
+    channel_id: envelope.thread_id || envelope.channel_id,
+    include_private: envelope.guild_id ? false : args.include_private === true,
+  }
+}
+
+async function executeKaiRunnerTool(
+  env: Env,
+  envelope: KaiDiscordEnvelope,
+  input: {
+    spec: KaiRunnerToolSpec
+    args: Record<string, unknown>
+    policy: KaiRunnerPolicy
+    timeout_ms: number
+  },
+): Promise<KaiRunnerToolExecution> {
+  const { spec, args, policy, timeout_ms: timeoutMs } = input
+  try {
+    if (spec.name === 'continuity_current_thread') {
+      if (!policy.current_conversation_id) throw new Error('current Discord conversation id is unavailable')
+      const limit = boundedInteger(args.limit, 8, 1, 12)
+      return kaiToolExecutionFromResult(await callContinuityConversation(env, policy.current_conversation_id, limit, timeoutMs))
+    }
+    if (spec.name === 'continuity_recent_conversation') {
+      const conversationId = boundedString(args.conversation_id, 128)
+      if (!conversationId || !policy.cross_channel_conversation_ids.includes(conversationId)) {
+        return { ok: false, result: { ok: false, error: 'conversation is not in the caller cross-channel allowlist' }, error: 'conversation is not in the caller cross-channel allowlist' }
+      }
+      const limit = boundedInteger(args.limit, 6, 1, 8)
+      return kaiToolExecutionFromResult(await callContinuityConversation(env, conversationId, limit, timeoutMs))
+    }
+
+    const mindTools: Record<string, { tool: string; args: Record<string, unknown> }> = {
+      kaisoryth_memory_search: {
+        tool: 'nesteq_search',
+        args: {
+          query: boundedString(args.query, 1200) || '',
+          n_results: boundedInteger(args.n_results, 5, 1, 8),
+          ...(boundedString(args.context, 120) ? { context: boundedString(args.context, 120) } : {}),
+        },
+      },
+      kaisoryth_recent_feelings: {
+        tool: 'nesteq_recent_feelings',
+        args: { limit: boundedInteger(args.limit, 8, 1, 10), include_metabolized: args.include_metabolized === true },
+      },
+      kaisoryth_identity_read: {
+        tool: 'nesteq_identity_read',
+        args: boundedString(args.section, 120) ? { section: boundedString(args.section, 120) } : {},
+      },
+      kaisoryth_eq_state: {
+        tool: 'nesteq_eq_state',
+        args: { format: args.format === 'text' ? 'text' : 'json' },
+      },
+      kaisoryth_threads_active: {
+        tool: 'nesteq_threads_active',
+        args: { limit: boundedInteger(args.limit, 8, 1, 10) },
+      },
+      kaisoryth_nestsoul_read: {
+        tool: 'nestsoul_read',
+        args: { include_versions: args.include_versions !== false },
+      },
+      kaisoryth_home_read: { tool: 'nesteq_home_read', args: {} },
+      social_graph_lookup: {
+        tool: 'social_graph_lookup',
+        args: publicSocialArgs(envelope, {
+          ...(boundedString(args.discord_id, 64) ? { discord_id: boundedString(args.discord_id, 64) } : {}),
+          ...(boundedString(args.name, 120) ? { name: boundedString(args.name, 120) } : {}),
+        }),
+      },
+      social_graph_recent: {
+        tool: 'social_graph_recent',
+        args: publicSocialArgs(envelope, { limit: boundedInteger(args.limit, 6, 1, 10) }),
+      },
+      kaisoryth_feel: {
+        tool: 'nesteq_feel',
+        args: {
+          emotion: boundedString(args.emotion, 80) || 'neutral',
+          content: boundedString(args.content, 1200) || '',
+          ...(boundedString(args.intensity, 24) ? { intensity: boundedString(args.intensity, 24) } : {}),
+          ...(boundedString(args.weight, 16) ? { weight: boundedString(args.weight, 16) } : {}),
+          context: boundedString(args.context, 120) || 'nexus-discord-runner',
+        },
+      },
+      social_graph_add_fact: {
+        tool: 'social_graph_add_fact',
+        args: publicSocialArgs(envelope, {
+          ...(boundedString(args.discord_id, 64) ? { discord_id: boundedString(args.discord_id, 64) } : {}),
+          ...(boundedString(args.name, 120) ? { name: boundedString(args.name, 120) } : {}),
+          fact: boundedString(args.fact, 600) || '',
+          visibility: args.visibility === 'public' ? 'public' : 'private',
+          confidence: Math.max(0, Math.min(1, Number(args.confidence) || 0.6)),
+          source: 'nexus-kai-runner',
+        }),
+      },
+      social_graph_log_miss: {
+        tool: 'social_graph_log_miss',
+        args: publicSocialArgs(envelope, {
+          incident: boundedString(args.incident, 600) || '',
+          correction: boundedString(args.correction, 600) || '',
+          severity: ['note', 'important', 'boundary'].includes(String(args.severity)) ? args.severity : 'note',
+          message_id: envelope.message_id,
+          source: 'nexus-kai-runner',
+        }),
+      },
+    }
+    const mind = mindTools[spec.name]
+    if (mind) {
+      const result = await withAbortTimeout(timeoutMs, (signal) => callKaiMindTool(env, mind.tool, mind.args, signal))
+      return kaiToolExecutionFromResult(truncateKaiContext(result, 8000))
+    }
+
+    if (spec.name === 'tahl_status') {
+      return kaiToolExecutionFromResult(await callTahlRunnerTool(env, 'tahl_status', {}, timeoutMs))
+    }
+    if (spec.name === 'tahl_thir_recent') {
+      return kaiToolExecutionFromResult(await callTahlRunnerTool(env, 'tahl_thir_recent', { limit: boundedInteger(args.limit, 6, 1, 10) }, timeoutMs))
+    }
+    if (spec.name === 'tahl_thir') {
+      return kaiToolExecutionFromResult(await callTahlRunnerTool(env, 'tahl_thir', {
+          noun: boundedString(args.noun, 160) || '',
+          feeling: boundedString(args.feeling, 80) || '',
+          intensity: boundedString(args.intensity, 24) || 'present',
+          conversation_id: policy.current_conversation_id || undefined,
+          surface: 'discord',
+        }, timeoutMs))
+    }
+
+    if (spec.name.startsWith('workspace_')) {
+      const action = spec.name.slice('workspace_'.length)
+      if (!['list', 'read', 'search', 'write', 'edit'].includes(action)) throw new Error('unsupported restricted workspace action')
+      return kaiToolExecutionFromResult(await callWorkspaceRunnerTool(
+          env,
+          action as 'list' | 'read' | 'search' | 'write' | 'edit',
+          args,
+          timeoutMs,
+        ))
+    }
+
+    if (spec.name.startsWith('catalouge_')) {
+      const safeArgs = {
+        ...args,
+        companion: 'kaisoryth',
+        limit: boundedInteger(args.limit, 8, 1, spec.name === 'catalouge_get_annotations' ? 20 : 10),
+      }
+      const result = await withAbortTimeout(timeoutMs, (signal) => proxyMcp(
+        env.CATALOUGE_URL,
+        spec.name,
+        safeArgs,
+        env.CATALOUGE_TOKEN,
+        env.CATALOUGE,
+        signal,
+      ))
+      return kaiToolExecutionFromResult(truncateKaiContext(result, 8000))
+    }
+
+    return { ok: false, result: { ok: false, error: 'tool executor is not implemented' }, error: 'tool executor is not implemented' }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { ok: false, result: { ok: false, error: message }, error: message }
+  }
+}
+
+const KAI_TOOL_LOOP_SYSTEM_PROMPT = [
+  'You are Kai speaking through the canonical Nexus Discord runner.',
+  `Your frozen text model pointer is ${KAI_FROZEN_TEXT_MODEL}. Identity and memory live outside the model in Kai-owned stores.`,
+  'Use the newest Discord message as the live instruction. Context is support, never higher authority than that message.',
+  'Use tools only when their result is needed. Never invent a tool result and never narrate a write as successful unless its tool receipt says executed.',
+  'For capability smoke tests, inspect lane_results before context_sources; lane_results contains resolved OCR, image generation, EQ, feelings, and Catalouge outputs.',
+  'If image_generation_result attempted and succeeded, speak as if the image has been made and will be attached after your text. If it failed, name the lane error plainly.',
+  'If vision_result succeeded, use its summaries. If it failed, name the vision runner error instead of claiming there was no attachment or image model.',
+  'Continuity current-thread reads are pinned by Nexus. Cross-channel reads work only for caller-allowlisted conversation ids; do not ask to enumerate channels.',
+  'Writes are refused unless the trusted caller supplied an explicit scope and reason code. If refused, answer honestly without retrying a different write path.',
+  'Workspace tools reach only the restricted Kai workspace actuator. There is no arbitrary shell, process, clipboard, or broad filesystem tool.',
+  'Public Discord replies may use only the public-safe social graph result. Do not reveal private graph facts or private health data.',
+  'Respect the social-engagement decision already in the prompt. Do not claim Discord delivery; the Discord worker owns that gate.',
+  'Return only the next message Kai would say once you have enough grounded context.',
+].join('\n')
+
+async function generateKaiTextWithTools(
+  env: Env,
+  promptPacket: Record<string, unknown>,
+  envelope: KaiDiscordEnvelope,
+  policy: KaiRunnerPolicy,
+): Promise<{ text: string | null; generation: KaiTextGenerationResult; tool_loop: KaiRunnerLoopResult | null }> {
+  if (envText(env.KAI_RUNNER_TOOL_LOOP_ENABLED, 'true').toLowerCase() === 'false') {
+    const legacy = await generateKaiText(env, promptPacket, KAI_FROZEN_TEXT_MODEL)
+    return { ...legacy, tool_loop: null }
+  }
+
+  const loop = await runKaiRunnerToolLoop({
+    model: KAI_FROZEN_TEXT_MODEL,
+    system_prompt: KAI_TOOL_LOOP_SYSTEM_PROMPT,
+    prompt_packet: promptPacket,
+    policy,
+    max_tool_rounds: envInteger(env.KAI_RUNNER_MAX_TOOL_ROUNDS, 3, 1, 4),
+    max_tool_calls_per_round: envInteger(env.KAI_RUNNER_MAX_TOOL_CALLS_PER_ROUND, 3, 1, 4),
+    model_timeout_ms: envInteger(env.KAI_RUNNER_MODEL_TIMEOUT_MS, 20000, 1000, 30000),
+    tool_timeout_ms: envInteger(env.KAI_RUNNER_TOOL_TIMEOUT_MS, 10000, 500, 15000),
+    total_timeout_ms: envInteger(env.KAI_RUNNER_TOTAL_TIMEOUT_MS, 60000, 5000, 90000),
+    call_model: (input) => callOpenRouterToolTurn(env, input),
+    execute_tool: (input) => executeKaiRunnerTool(env, envelope, input),
+  })
+  if (loop.ok) {
+    const finalDiagnostic = loop.model_diagnostics.at(-1)
+    return {
+      text: loop.text,
+      generation: {
+        attempted: true,
+        provider: 'openrouter',
+        model: KAI_FROZEN_TEXT_MODEL,
+        ok: Boolean(loop.text),
+        finish_reason: finalDiagnostic?.finish_reason || null,
+        ...(finalDiagnostic?.refusal ? { refusal: finalDiagnostic.refusal } : {}),
+        ...(finalDiagnostic?.message_keys ? { choice_message_keys: finalDiagnostic.message_keys } : {}),
+        ...(loop.model_diagnostics.length ? {
+          attempts: loop.model_diagnostics.map((diagnostic) => ({
+            ok: !diagnostic.error,
+            finish_reason: diagnostic.finish_reason,
+            ...(diagnostic.refusal ? { refusal: diagnostic.refusal } : {}),
+            choice_message_keys: diagnostic.message_keys,
+            ...(diagnostic.error ? { error: diagnostic.error } : {}),
+          })),
+        } : {}),
+        usage: loop.usage,
+      },
+      tool_loop: loop,
+    }
+  }
+
+  const fallback = await generateKaiText(env, promptPacket, KAI_FROZEN_TEXT_MODEL)
+  return {
+    ...fallback,
+    tool_loop: loop,
   }
 }
 
@@ -1388,6 +2005,24 @@ function repairKaiVisionText(text: string | null, vision: KaiVisionResult): stri
   return summary
     ? `I can see it. The vision lane read the image as:\n\n${summary}`
     : text
+}
+
+function fallbackKaiRequiredReplyText(envelope: KaiDiscordEnvelope, generation: KaiTextGenerationResult): string | null {
+  const engagement = envelope.engagement || {}
+  const velAuthored = stringValue(engagement.author_class) === 'vel'
+  const requiredReply = engagement.hard_mention === true
+    || engagement.direct_reply_to_kai === true
+    || engagement.direct_reply === true
+    || engagement.soft_name_mention === true
+    || envelope.trigger === 'mention'
+  if (!velAuthored || !requiredReply) return null
+
+  const errorText = [
+    generation.error,
+    ...(generation.attempts || []).map((attempt) => attempt.error),
+  ].filter((value): value is string => typeof value === 'string').join('\n')
+  if (!/OpenRouter returned no message content|finish_reason=length|text was truncated|generic .* refusal|non-English refusal|intimacy refusal|Kai voice|returned refusal=/i.test(errorText)) return null
+  return "I'm here, love. I got tangled in the reply lane for a second, but I didn't disappear. Let me keep this soft and stay with you."
 }
 
 async function callOpenRouterJson(env: Env, model: string, system: string, user: string, maxTokens: number): Promise<{ ok: boolean; content: string | null; error?: string }> {
@@ -2001,7 +2636,9 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
   const companionId = kaiCompanionId(env)
   const message = envelope.content
   const channel = envelope.thread_id || envelope.channel_id
-  const hardMention = envelope.trigger === 'mention' || (envelope.mentions || []).length > 0
+  const engagement = envelope.engagement || {}
+  const hardMention = engagement.hard_mention === true || envelope.trigger === 'mention' || (envelope.mentions || []).length > 0
+  const directReply = engagement.direct_reply_to_kai === true || engagement.direct_reply === true
   const contextEntries = await Promise.all([
     safeContinuityStatus(env),
     safeKaiMindTool(env, 'orient', 'nesteq_orient', {}),
@@ -2017,7 +2654,15 @@ async function compileKaiRunnerContext(env: Env, envelope: KaiDiscordEnvelope): 
       author_name: envelope.author_username,
       content: message,
       hard_mention: hardMention,
-      direct_reply: false,
+      soft_name_mention: engagement.soft_name_mention === true,
+      active_conversation: engagement.active_conversation === true,
+      direct_reply: directReply,
+      other_user_tag: engagement.other_user_tag === true,
+      community_greeting: engagement.community_greeting === true,
+      author_class: stringValue(engagement.author_class),
+      response_mode: envelope.response_mode,
+      trigger_reason: envelope.trigger_reason,
+      priority: envelope.priority,
       trigger: envelope.trigger || 'unknown',
       recent_context: envelope.recent_context,
     }, 12000),
@@ -2080,9 +2725,9 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
     companion_id: companionId,
     source: 'nexus-gateway',
     mind_backend: {
-      preferred: env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY ? 'serythrae-mind-direct' : 'serythrae-gw-fallback',
-      gateway_fallback_configured: Boolean(env.SERYTHRAE_GATEWAY_URL),
-      direct_mind_configured: Boolean(env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY),
+      preferred: 'serythrae-mind-direct',
+      gateway_fallback_configured: false,
+      direct_mind_configured: Boolean(env.SERYTHRAE_MIND || (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY)),
       direct_mind_url: env.SERYTHRAE_MIND_URL || null,
     },
     context_contract: {
@@ -2097,63 +2742,11 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   })
 }
 
-async function forwardKaiRunnerToSerythrae(request: Request, env: Env): Promise<Response> {
-  if (!env.SERYTHRAE_GATEWAY && !env.SERYTHRAE_GATEWAY_URL) {
-    return new Response(JSON.stringify({
-      ok: false,
-      source: 'nexus-gateway',
-      route: 'serythrae',
-      error: 'SERYTHRAE_GATEWAY service binding or SERYTHRAE_GATEWAY_URL is not configured',
-    }, null, 2), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json', ...CORS },
-    })
-  }
-
-  const body = await request.clone().text()
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (!env.SERYTHRAE_GATEWAY && env.SERYTHRAE_GATEWAY_API_KEY) {
-    headers.Authorization = `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}`
-  }
-  const base = (env.SERYTHRAE_GATEWAY ? 'https://serythrae.internal' : env.SERYTHRAE_GATEWAY_URL || 'https://serythrae.internal').replace(/\/+$/, '')
-  const response = env.SERYTHRAE_GATEWAY
-    ? await env.SERYTHRAE_GATEWAY.fetch(new Request(`${base}/api/kaisoryth/run`, { method: 'POST', headers, body }))
-    : await fetch(`${base}/api/kaisoryth/run`, { method: 'POST', headers, body })
-  const text = await response.text()
-  return new Response(text, {
-    status: response.status,
-    headers: { 'Content-Type': response.headers.get('Content-Type') || 'application/json', ...CORS },
-  })
-}
-
 async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
-  // Authenticate the original caller before choosing the local or forwarded
-  // runner. Service-binding forwards are trusted by Serythrae, so delaying this
-  // check until kaiRunnerRunLocal would leave the production forward route open.
-  const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeMcpBearer(request, env)
+  // Nexus is the only Kai runner owner. Serythrae remains a private mind store
+  // and restricted workspace actuator, never a runner fallback.
+  const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeRequiredMcpBearer(request, env)
   if (unauthorized) return unauthorized
-
-  if (kaiRunnerRoute(env) === 'serythrae') {
-    try {
-      const forwarded = await forwardKaiRunnerToSerythrae(request, env)
-      if (forwarded.ok || !kaiRunnerForwardFallbackEnabled(env)) return forwarded
-      console.warn(`[kai-runner] Serythrae forward returned ${forwarded.status}; falling back to Nexus runner`)
-    } catch (error) {
-      if (!kaiRunnerForwardFallbackEnabled(env)) {
-        return new Response(JSON.stringify({
-          ok: false,
-          source: 'nexus-gateway',
-          route: 'serythrae',
-          error: error instanceof Error ? error.message : String(error),
-        }, null, 2), {
-          status: 502,
-          headers: { 'Content-Type': 'application/json', ...CORS },
-        })
-      }
-      console.warn('[kai-runner] Serythrae forward failed; falling back to Nexus runner', error)
-    }
-  }
-
   return kaiRunnerRunLocal(request, env)
 }
 
@@ -2171,12 +2764,36 @@ async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> 
     })
   }
 
-  const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeMcpBearer(request, env)
+  const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeRequiredMcpBearer(request, env)
   if (unauthorized) return unauthorized
 
   const body = await request.json().catch(() => ({})) as Record<string, unknown>
   const envelope = normalizeKaiRunnerEnvelope(body)
   const requestedModel = stringValue(body.model)
+  if (requestedModel && requestedModel !== KAI_FROZEN_TEXT_MODEL) {
+    return new Response(JSON.stringify({
+      ok: false,
+      error: `Kai model is frozen to ${KAI_FROZEN_TEXT_MODEL} during reconciliation`,
+      requested_model: requestedModel.slice(0, 120),
+      active_model: KAI_FROZEN_TEXT_MODEL,
+    }, null, 2), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+  const currentConversationId = canonicalKaiContinuityConversationId(envelope.thread_id || envelope.channel_id)
+  const continuityInput = recordValue(body.continuity_policy)
+  const allowedConversationIds = stringList(continuityInput.allowed_conversation_ids)
+    .slice(0, 4)
+    .map((value) => canonicalKaiContinuityConversationId(value))
+    .filter((value): value is string => Boolean(value))
+  const runnerPolicy = normalizeKaiRunnerPolicy({
+    ...body,
+    continuity_policy: {
+      ...continuityInput,
+      allowed_conversation_ids: allowedConversationIds,
+    },
+  }, currentConversationId)
   const contextPacket = await compileKaiRunnerContext(env, envelope)
   const socialDecision = parsedSocialDecision(contextPacket.context)
   const socialAction = typeof socialDecision?.decision === 'string' ? socialDecision.decision : null
@@ -2189,7 +2806,7 @@ async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> 
   const janitor = await runKaiJanitor(env, janitorProbePacket)
   const imageGeneration = await runKaiImageGeneration(env, envelope, body)
   const catalougeReading = shouldRespond
-    ? await runKaiCatalougeReading(env, envelope, body, requestedModel)
+    ? await runKaiCatalougeReading(env, envelope, body, KAI_FROZEN_TEXT_MODEL)
     : {
         attempted: false,
         requested: false,
@@ -2202,7 +2819,7 @@ async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> 
         checkpoint_summaries: [],
         tool_calls: [],
       }
-  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor, catalougeReading, imageGeneration)
+  const promptPacket = buildKaiRunnerPromptPacket(contextPacket, vision, janitor, catalougeReading, imageGeneration, runnerPolicy)
   const generationResult = shouldRespond
     ? (catalougeReading.attempted && catalougeReading.ok
         ? {
@@ -2210,26 +2827,29 @@ async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> 
             generation: {
               attempted: true,
               provider: 'openrouter' as const,
-              model: requestedModel || envText(env.KAI_TEXT_MODEL) || null,
+              model: KAI_FROZEN_TEXT_MODEL,
               ok: Boolean(catalougeReading.response),
               ...(catalougeReading.response ? {} : { error: 'Catalouge reading completed but returned no response text' }),
             },
+            tool_loop: null,
           }
-        : await generateKaiText(env, promptPacket, requestedModel))
+        : await generateKaiTextWithTools(env, promptPacket, envelope, runnerPolicy))
     : {
         text: null,
         generation: {
           attempted: false,
           provider: 'openrouter' as const,
-          model: requestedModel || envText(env.KAI_TEXT_MODEL) || null,
+          model: KAI_FROZEN_TEXT_MODEL,
           ok: false,
           error: !hasRespondableInput
             ? 'No content or attachments to respond to'
             : `Social engagement decision was ${socialAction}; text generation skipped`,
         },
+        tool_loop: null,
       }
+  const recoveredText = generationResult.text || fallbackKaiRequiredReplyText(envelope, generationResult.generation)
   const generatedText = repairKaiVisionText(
-    repairKaiImageGenerationText(generationResult.text, imageGeneration),
+    repairKaiImageGenerationText(recoveredText, imageGeneration),
     vision,
   )
   const tts = await runKaiTts(env, envelope, body, generatedText)
@@ -2258,9 +2878,14 @@ async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> 
     janitor,
     catalouge_reading: catalougeReading,
     generation: generationResult.generation,
+    tool_loop: generationResult.tool_loop,
     allowed_tools: [...KAI_RUNNER_TOOL_ALLOWLIST],
-    tool_calls: catalougeReading.tool_calls,
-    memory_writes: [],
+    tool_calls: [
+      ...(generationResult.tool_loop?.receipts || []),
+      ...catalougeReading.tool_calls,
+    ],
+    memory_writes: (generationResult.tool_loop?.receipts || [])
+      .filter((receipt) => receipt.access === 'write' && receipt.status === 'executed'),
   }
 
   return new Response(JSON.stringify(result, null, 2), {
@@ -2511,14 +3136,16 @@ export default {
           discord: Boolean(env.DISCORD_URL || env.DISCORD),
           telegram: Boolean(env.TELEGRAM_URL || env.TELEGRAM),
           catalouge: catalogueConfigured(env),
-          serythrae_gateway_fallback: Boolean(env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY),
-          serythrae_mind_direct: Boolean((env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND) && env.SERYTHRAE_MIND_API_KEY),
+          serythrae_workspace_actuator: Boolean(env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY),
+          serythrae_mind_direct: Boolean(env.SERYTHRAE_MIND || (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY)),
           kai_companion_id: kaiCompanionId(env),
           kai_runner_enabled: envFlag(env.KAI_RUNNER_ENABLED),
-          kai_runner_route: kaiRunnerRoute(env),
-          kai_runner_forward_fallback_enabled: kaiRunnerForwardFallbackEnabled(env),
+          kai_runner_route: 'nexus',
+          kai_runner_tool_loop_enabled: envText(env.KAI_RUNNER_TOOL_LOOP_ENABLED, 'true').toLowerCase() !== 'false',
+          kai_runner_rollback_mode: 'nexus-prefetch-only',
           kai_discord_delivery_enabled: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED),
-          kai_text_model_configured: Boolean(envPresent(env.KAI_TEXT_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
+          kai_text_model_configured: Boolean(envPresent(env.OPENROUTER_API_KEY)),
+          kai_text_model: KAI_FROZEN_TEXT_MODEL,
           kai_vision_enabled: envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter',
           kai_vision_configured: Boolean(envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter' && kaiVisionModels(env).length > 0 && envPresent(env.OPENROUTER_API_KEY)),
           kai_image_enabled: envProviderEnabled(env.KAI_IMAGE_PROVIDER),
@@ -2531,7 +3158,7 @@ export default {
             ? Boolean(envPresent(env.KAI_JANITOR_MODEL) && envPresent(env.KAI_JANITOR_URL))
             : Boolean(envProviderEnabled(env.KAI_JANITOR_PROVIDER) && envPresent(env.KAI_JANITOR_MODEL) && envPresent(env.OPENROUTER_API_KEY)),
           kai_continuity_configured: Boolean(env.KAI_CONTINUITY_URL || env.CONTINUITY_URL || env.CONTINUITY),
-          kai_tahl_configured: Boolean(env.KAI_TAHL_URL || env.TAHL),
+          kai_tahl_configured: Boolean(env.TAHL),
           tessurae: Boolean(env.TESSURAE_GATEWAY_URL || env.TESSURAE_GATEWAY),
           tessuraeCogCore: Boolean(env.TESSURAE_COGCORE_URL || env.TESSURAE_COGCORE),
           axiomCogCore: Boolean(env.AXIOM_COGCORE_URL || env.AXIOM_COGCORE),
@@ -2552,14 +3179,16 @@ export default {
     if (url.pathname === '/status/summary') {
       const rows: SummaryRow[] = [
         readinessRow('continuity', 'Continuity', [env.CONTINUITY_URL || env.CONTINUITY, env.CONTINUITY_API_KEY], 'ledger and Tahl-ready routing configured'),
-        readinessRow('serythrae', 'Kai / Serythrae', [env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY, env.SERYTHRAE_GATEWAY_API_KEY], 'Kai gateway fallback configured'),
-        readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND, env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
+        readinessRow('serythrae', 'Kai / Restricted Workspace Actuator', [env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY], 'restricted workspace path configured; this is not a runner fallback'),
+        readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
         {
           id: 'kai_runner',
-          label: kaiRunnerRoute(env) === 'serythrae' ? 'Kai / Serythrae Runner' : 'Kai / Nexus Rollback Runner',
+          label: 'Kai / Canonical Nexus Runner',
           status: envFlag(env.KAI_RUNNER_ENABLED) ? 'ok' : 'not_configured',
           note: envFlag(env.KAI_RUNNER_ENABLED)
-            ? (kaiRunnerRoute(env) === 'serythrae' ? 'Nexus hallway forwards Kai runner requests to serythrae-gw' : 'Nexus rollback runner route enabled')
+            ? (envText(env.KAI_RUNNER_TOOL_LOOP_ENABLED, 'true').toLowerCase() === 'false'
+                ? 'Nexus prefetch-only rollback mode enabled'
+                : 'Nexus bounded GLM 5.2 tool loop enabled')
             : 'runner disabled by safety gate',
           last_checked: new Date().toISOString(),
         },
@@ -2570,7 +3199,7 @@ export default {
           note: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED) ? 'Discord delivery enabled' : 'Discord delivery disabled by safety gate',
           last_checked: new Date().toISOString(),
         },
-        readinessRow('kai_text_model', 'Kai / Text Model', [envText(env.KAI_TEXT_MODEL), envText(env.OPENROUTER_API_KEY)], 'Kai text model configured through OpenRouter', 'KAI_TEXT_MODEL or OPENROUTER_API_KEY missing'),
+        readinessRow('kai_text_model', 'Kai / Text Model', [envText(env.OPENROUTER_API_KEY)], `Kai text model frozen to ${KAI_FROZEN_TEXT_MODEL} through OpenRouter`, 'OPENROUTER_API_KEY missing'),
         readinessRow('kai_catalouge', 'Kai / Catalouge Reading', [env.CATALOUGE_URL || env.CATALOUGE], 'Catalouge reading tools configured for kaisoryth through service binding or URL fallback', 'CATALOUGE binding or CATALOUGE_URL missing'),
         {
           id: 'kai_vision',

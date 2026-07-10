@@ -102,7 +102,6 @@ function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex }
           ...(preflightCodex ? { VEL_PREFLIGHT_CODEX_API_KEY: preflightCodex } : {}),
           SERYTHRAE_MIND_API_KEY: 'fixture-mind-key',
           KAI_RUNNER_ENABLED: 'true',
-          KAI_RUNNER_ROUTE: 'serythrae',
         },
         serviceBindings: {
           ARCHIVE: 'backend-mock',
@@ -333,7 +332,7 @@ test('MCP and SSE transports fail closed for missing, wrong, and unconfigured cr
   }
 });
 
-test('production Serythrae-forwarded Kai runner auth accepts either configured key and preserves no-key and internal bypass semantics', async () => {
+test('canonical Nexus Kai runner auth accepts either configured key, fails closed without keys, and preserves internal bypass', async () => {
   const init = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -359,11 +358,10 @@ test('production Serythrae-forwarded Kai runner auth accepts either configured k
     ['next-only external', nextOnly, `Bearer ${NEXT_API_KEY}`, 'https://nexus.test'],
     ['both external current', both, `Bearer ${CURRENT_API_KEY}`, 'https://nexus.test'],
     ['both external next', both, `Bearer ${NEXT_API_KEY}`, 'https://nexus.test'],
-    ['no-key external', missingConfig, undefined, 'https://nexus.test'],
     ['internal bypass', nextOnly, `Bearer ${WRONG_API_KEY}`, 'https://nexus.internal'],
   ]) {
     const response = await request(worker, '/api/kaisoryth/run', { ...init, authorization, baseUrl });
-    assert.notEqual(response.status, 401, `${name} should pass optional auth`);
+    assert.notEqual(response.status, 401, `${name} should pass canonical runner auth`);
     assert.notEqual(response.status, 503, `${name} should not require missing auth configuration`);
     assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
     assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
@@ -374,13 +372,18 @@ test('production Serythrae-forwarded Kai runner auth accepts either configured k
     ['next-only preview', nextOnly, `Bearer ${NEXT_API_KEY}`],
     ['both preview current', both, `Bearer ${CURRENT_API_KEY}`],
     ['both preview next', both, `Bearer ${NEXT_API_KEY}`],
-    ['no-key preview', missingConfig, undefined],
   ]) {
     const response = await request(worker, '/api/kaisoryth/runner-preview', { ...init, authorization });
-    assert.notEqual(response.status, 401, `${name} should pass forwarded runner auth`);
+    assert.notEqual(response.status, 401, `${name} should pass canonical runner auth`);
     assert.notEqual(response.status, 503, `${name} should not require missing auth configuration`);
     assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
     assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
+  }
+
+  for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
+    const response = await request(missingConfig, route, init);
+    assert.equal(response.status, 503, `${route} must fail closed when MCP authority is unconfigured`);
+    assert.deepEqual(await response.json(), { error: 'MCP_API_KEY is not configured' });
   }
 });
 
