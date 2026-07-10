@@ -108,6 +108,20 @@ export function registerContinuityTools(server: McpServer, env: Env) {
     return continuityFetch(env, `/wake-candidates${params.toString() ? `?${params}` : ''}`, { method: 'GET' })
   })
 
+  server.tool('continuity_wake_baseline_status', 'Read body-free wake baseline receipts and queue counts for one explicit companion lane.', {
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
+    surface: z.string().min(1).max(120).optional().describe('Optional exact surface filter, such as discord or haven'),
+  }, async (args) => {
+    const companionId = normalizeCompanionId(args.companion_id)
+    const params = new URLSearchParams()
+    if (args.surface !== undefined) params.set('surface', args.surface)
+    return continuityFetch(
+      env,
+      `/companions/${encodeURIComponent(companionId)}/wake-baselines/status${params.toString() ? `?${params}` : ''}`,
+      { method: 'GET' },
+    )
+  })
+
   server.tool('continuity_claim_wake', 'Claim one wake candidate with a runner lease.', {
     runner_id: z.string(),
     companion_id: z.string().optional().describe('Canonical companion_id or accepted alias'),

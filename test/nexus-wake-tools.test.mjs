@@ -19,6 +19,7 @@ const velPreflight = readFileSync(new URL('../src/vel-preflight.ts', import.meta
 test('Nexus exposes runner-facing Continuity wake tools', () => {
   for (const toolName of [
     'continuity_wake_candidates',
+    'continuity_wake_baseline_status',
     'continuity_claim_wake',
     'continuity_wake_context',
     'continuity_submit_wake_response',
@@ -48,6 +49,7 @@ test('PulseSync preflight is server-authorized, compact, and privately bound', (
 test('Nexus wake tools route to Continuity wake endpoints', () => {
   for (const path of [
     '/wake-candidates',
+    '/wake-baselines/status',
     '/wake-candidates/claim',
     '/context',
     '/response',
@@ -55,6 +57,24 @@ test('Nexus wake tools route to Continuity wake endpoints', () => {
   ]) {
     assert.ok(continuityTools.includes(path), `missing ${path}`);
   }
+});
+
+test('wake baseline status is a read-only, explicitly companion-scoped proxy', () => {
+  const start = continuityTools.indexOf("server.tool('continuity_wake_baseline_status'");
+  const end = continuityTools.indexOf("server.tool('continuity_claim_wake'", start);
+  const baselineToolBlock = continuityTools.slice(start, end);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.match(
+    baselineToolBlock,
+    /continuity_wake_baseline_status[\s\S]{0,500}companion_id: z\.string\(\)\.describe/,
+  );
+  assert.match(
+    baselineToolBlock,
+    /\/companions\/\$\{encodeURIComponent\(companionId\)\}\/wake-baselines\/status/,
+  );
+  assert.match(baselineToolBlock, /params\.set\('surface', args\.surface\)/);
+  assert.doesNotMatch(baselineToolBlock, /method: 'POST'/);
 });
 
 test('shared Tahl tools require explicit companion ids', () => {
