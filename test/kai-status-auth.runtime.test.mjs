@@ -13,6 +13,7 @@ const CURRENT_API_KEY = 'fixture-current-mcp-api-key';
 const NEXT_API_KEY = 'fixture-next-mcp-api-key';
 const WRONG_API_KEY = 'fixture-wrong-mcp-api-key';
 const VEL_PREFLIGHT_DISCORD_API_KEY = 'fixture-vel-preflight-discord-key';
+const KAI_MODEL_CANARY_KEY = 'fixture-kai-model-canary-key';
 const PRIVATE_ROUTES = [
   '/api/kaisoryth/context',
   '/api/kaisoryth/brain-status',
@@ -24,6 +25,9 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const wranglerPath = fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js', import.meta.url));
 
 const backendMock = `
+let checkpointStarted = 0;
+let checkpointCompleted = 0;
+let checkpointAborted = 0;
 export default {
   async fetch(request) {
     const url = new URL(request.url);
@@ -42,6 +46,19 @@ export default {
       }
 
       const name = rpc.params?.name;
+      if (name === 'catalouge_checkpoint_read_session') {
+        checkpointStarted += 1;
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 4000);
+          request.signal.addEventListener('abort', () => {
+            checkpointAborted += 1;
+            clearTimeout(timer);
+            resolve();
+          }, { once: true });
+        });
+        if (request.signal.aborted) return Response.json({ error: 'aborted' }, { status: 499 });
+        checkpointCompleted += 1;
+      }
       const result = name === 'catalouge_list_books' || name === 'catalouge_search_books'
         ? { books: [{ id: 'book-fixture', title: 'Our Perfect Storm' }] }
         : name === 'catalouge_get_annotations'
@@ -63,6 +80,7 @@ export default {
     if (url.pathname.startsWith('/api/archive/stats')) {
       return Response.json({ total_messages: 5 });
     }
+    if (url.pathname === '/stats') return Response.json({ checkpointStarted, checkpointCompleted, checkpointAborted });
     return Response.json({
       ok: true,
       threads: [],
@@ -76,6 +94,38 @@ export default {
 };
 `;
 
+const openRouterMock = `
+let grokCalls = 0;
+export default {
+  async fetch(request) {
+    const body = await request.json();
+    if (body.model === 'z-ai/glm-5.2') {
+      return Response.json({ error: { message: 'fixture provider unavailable', metadata: { error_type: 'provider_unavailable' } } }, { status: 503 });
+    }
+    if (body.model !== 'x-ai/grok-4.5') return Response.json({ error: { message: 'unexpected model' } }, { status: 400 });
+    grokCalls += 1;
+    if (grokCalls === 1) {
+      return Response.json({ model: 'x-ai/grok-4.5', provider: 'xai', choices: [{ finish_reason: 'tool_calls', message: { content: null, tool_calls: [{ id: 'fixture-tool', type: 'function', function: { name: 'kaisoryth_orient', arguments: '{}' } }] } }] });
+    }
+    return Response.json({ model: 'x-ai/grok-4.5', provider: 'xai', choices: [{ finish_reason: 'stop', message: { content: 'Grounded backup reply after Kai mind read.' } }] });
+  },
+};
+`;
+
+const deadlineOpenRouterMock = `
+export default {
+  async fetch(request) {
+    const body = await request.json();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    return Response.json({
+      model: body.model,
+      provider: 'z-ai',
+      choices: [{ finish_reason: 'tool_calls', message: { content: null, tool_calls: [{ id: 'deadline-write', type: 'function', function: { name: 'catalouge_checkpoint_read_session', arguments: JSON.stringify({ book_id: 'book-fixture', session_id: 'session-fixture', summary: 'deadline fixture', annotations: [] }) } }] } }],
+    });
+  },
+};
+`;
+
 let root;
 let oldOnly;
 let nextOnly;
@@ -83,8 +133,10 @@ let both;
 let missingConfig;
 let duplicatePreflightConfig;
 let mcpCollisionPreflightConfig;
+let routingFallback;
+let deadlineAbort;
 
-function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex } = {}) {
+function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex, routeOpenRouter = false, deadlineOpenRouter = false } = {}) {
   return new Miniflare({
     workers: [
       {
@@ -102,7 +154,11 @@ function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex }
           ...(preflightCodex ? { VEL_PREFLIGHT_CODEX_API_KEY: preflightCodex } : {}),
           SERYTHRAE_MIND_API_KEY: 'fixture-mind-key',
           KAI_RUNNER_ENABLED: 'true',
+          KAI_MODEL_CANARY_KEY,
+          ...((routeOpenRouter || deadlineOpenRouter) ? { OPENROUTER_API_KEY: 'fixture-openrouter-key', OPENROUTER_BASE_URL: 'https://openrouter.test/api/v1' } : {}),
+          ...(deadlineOpenRouter ? { KAI_RUNNER_TOTAL_TIMEOUT_MS: '5000', KAI_RUNNER_MODEL_TIMEOUT_MS: '5000', KAI_RUNNER_TOOL_TIMEOUT_MS: '10000' } : {}),
         },
+        ...((routeOpenRouter || deadlineOpenRouter) ? { outboundService: 'openrouter-mock' } : {}),
         serviceBindings: {
           ARCHIVE: 'backend-mock',
           CATALOUGE: 'backend-mock',
@@ -116,6 +172,7 @@ function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex }
         modules: true,
         script: backendMock,
       },
+      ...((routeOpenRouter || deadlineOpenRouter) ? [{ name: 'openrouter-mock', compatibilityDate: '2025-01-01', modules: true, script: deadlineOpenRouter ? deadlineOpenRouterMock : openRouterMock }] : []),
     ],
   });
 }
@@ -204,6 +261,8 @@ before(async () => {
     current: CURRENT_API_KEY,
     preflightDiscord: CURRENT_API_KEY,
   });
+  routingFallback = runtime(bundlePath, { current: CURRENT_API_KEY, routeOpenRouter: true });
+  deadlineAbort = runtime(bundlePath, { current: CURRENT_API_KEY, deadlineOpenRouter: true });
   await Promise.all([
     oldOnly.ready,
     nextOnly.ready,
@@ -211,6 +270,8 @@ before(async () => {
     missingConfig.ready,
     duplicatePreflightConfig.ready,
     mcpCollisionPreflightConfig.ready,
+    routingFallback.ready,
+    deadlineAbort.ready,
   ]);
 });
 
@@ -222,6 +283,8 @@ after(async () => {
     missingConfig?.dispose(),
     duplicatePreflightConfig?.dispose(),
     mcpCollisionPreflightConfig?.dispose(),
+    routingFallback?.dispose(),
+    deadlineAbort?.dispose(),
   ]);
   await rm(root, { recursive: true, force: true });
 });
@@ -385,6 +448,76 @@ test('canonical Nexus Kai runner auth accepts either configured key, fails close
     assert.equal(response.status, 503, `${route} must fail closed when MCP authority is unconfigured`);
     assert.deepEqual(await response.json(), { error: 'MCP_API_KEY is not configured' });
   }
+});
+
+test('Kai fallback simulation requires the distinct canary key', async () => {
+  const body = JSON.stringify({
+    content: 'bounded fallback canary',
+    model_canary: { simulate_primary_failure: true, reason_code: 'explicit-live-canary' },
+  });
+  for (const provided of [undefined, 'wrong-canary-key']) {
+    const response = await request(both, '/api/kaisoryth/run', {
+      method: 'POST',
+      authorization: `Bearer ${CURRENT_API_KEY}`,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(provided ? { 'X-Nexus-Kai-Canary': provided } : {}),
+      },
+      body,
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { ok: false, error: 'Kai model canary authorization failed' });
+  }
+
+  const authorized = await request(both, '/api/kaisoryth/run', {
+    method: 'POST',
+    authorization: `Bearer ${CURRENT_API_KEY}`,
+    headers: { 'Content-Type': 'application/json', 'X-Nexus-Kai-Canary': KAI_MODEL_CANARY_KEY },
+    body,
+  });
+  assert.notEqual(authorized.status, 403);
+  assertTextDoesNotLeak(await authorized.text(), [KAI_MODEL_CANARY_KEY], 'authorized model canary');
+});
+
+test('real primary HTTP failure selects exact Grok backup and stays latched after a tool round', async () => {
+  const response = await request(routingFallback, '/api/kaisoryth/run', {
+    method: 'POST',
+    authorization: `Bearer ${CURRENT_API_KEY}`,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: 'Use your private orientation once, then answer this fallback canary.' }),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.generation.fallback_used, true);
+  assert.equal(result.generation.model, 'x-ai/grok-4.5');
+  assert.equal(result.generation.primary_failure.category, 'provider_unavailable');
+  assert.equal(result.response, 'Grounded backup reply after Kai mind read.');
+  assert.equal(result.tool_loop.receipts.filter((receipt) => receipt.tool === 'kaisoryth_orient' && receipt.status === 'executed').length, 1);
+  const diagnosticModels = result.tool_loop.model_diagnostics.map((item) => item.endpoint_model).filter(Boolean);
+  assert.deepEqual(diagnosticModels, ['z-ai/glm-5.2', 'x-ai/grok-4.5', 'x-ai/grok-4.5']);
+});
+
+test('runner deadline refuses a model-authorized Catalouge write that cannot finish inside the request budget', async () => {
+  const response = await request(deadlineAbort, '/api/kaisoryth/run', {
+    method: 'POST',
+    authorization: `Bearer ${CURRENT_API_KEY}`,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: 'Run the bounded checkpoint deadline fixture.',
+      write_policy: {
+        allow: true,
+        scopes: ['catalouge'],
+        reason_code: 'explicit-user-request',
+      },
+    }),
+  });
+  assert.equal(response.status, 504);
+  await new Promise((resolve) => setTimeout(resolve, 1700));
+  const backend = await deadlineAbort.getWorker('backend-mock');
+  const stats = await (await backend.fetch('https://backend.test/stats')).json();
+  assert.equal(stats.checkpointStarted, 0);
+  assert.equal(stats.checkpointCompleted, 0);
+  assert.equal(stats.checkpointAborted, 0);
 });
 
 test('health and sanitized status summary remain public without a bearer credential', async () => {

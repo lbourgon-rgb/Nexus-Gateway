@@ -13,6 +13,8 @@ const grokKethNestTools = readFileSync(new URL('../src/tools/grok-keth-nest.ts',
 const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 const nexusIndex = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 const kaiRunnerLoopSource = readFileSync(new URL('../src/kai-runner-loop.ts', import.meta.url), 'utf8');
+const kaiModelRoutingSource = readFileSync(new URL('../src/kai-model-routing.ts', import.meta.url), 'utf8');
+const kaiMediaSource = readFileSync(new URL('../src/kai-media.ts', import.meta.url), 'utf8');
 const rotationDoc = readFileSync(new URL('../docs/mcp-api-key-rotation.md', import.meta.url), 'utf8');
 const velPreflight = readFileSync(new URL('../src/vel-preflight.ts', import.meta.url), 'utf8');
 
@@ -187,6 +189,7 @@ test('Nexus owns Kai runner traffic and rollback stays inside Nexus', () => {
   assert.doesNotMatch(envSource, /KAI_RUNNER_ROUTE\?: string/);
   assert.doesNotMatch(envSource, /KAI_RUNNER_FORWARD_FALLBACK\?: string/);
   assert.match(wrangler, /KAI_TEXT_MODEL = "z-ai\/glm-5\.2"/);
+  assert.match(wrangler, /KAI_BACKUP_TEXT_MODEL = "x-ai\/grok-4\.5"/);
   assert.match(wrangler, /KAI_TEXT_PROVIDER_ORDER = "z-ai,streamlake,novita,deepinfra"/);
   assert.match(nexusIndex, /KAI_TEXT_PROVIDER_ORDER, 'z-ai,streamlake,novita,deepinfra'/);
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS = "false"/);
@@ -198,8 +201,15 @@ test('Nexus owns Kai runner traffic and rollback stays inside Nexus', () => {
   assert.match(nexusIndex, /return kaiRunnerRunLocal\(request, env\)/);
   assert.match(nexusIndex, /isInternalNexusServiceRequest\(request\) \? null : await authorizeRequiredMcpBearer\(request, env\)/);
   assert.match(nexusIndex, /KAI_RUNNER_TOOL_LOOP_ENABLED, 'true'/);
-  assert.match(nexusIndex, /const legacy = await generateKaiText\(env, promptPacket, KAI_FROZEN_TEXT_MODEL\)/);
-  assert.match(nexusIndex, /provider: kaiTextProviderPreferences\(env\)/);
+  assert.match(nexusIndex, /const legacy = await generateKaiText\(env, promptPacket, KAI_PRIMARY_TEXT_MODEL, routingState\)/);
+  assert.match(nexusIndex, /kaiProviderPreferencesForModel\(env, input\.model\)/);
+  assert.match(kaiModelRoutingSource, /KAI_BACKUP_TEXT_MODEL = 'x-ai\/grok-4\.5'/);
+  assert.match(kaiModelRoutingSource, /order: \['xai'\]/);
+  assert.match(kaiModelRoutingSource, /allow_fallbacks: false/);
+  assert.match(nexusIndex, /qualifiesForKaiBackup\(failure\)/);
+  assert.match(nexusIndex, /catch \(error\) \{\s*throw new KaiModelRequestError\(kaiFailureFromThrown\(error\)\)/);
+  assert.match(nexusIndex, /createKaiAttemptBudget\(input\.timeout_ms \* 2\)/);
+  assert.doesNotMatch(nexusIndex, /models:\s*\[KAI_PRIMARY_TEXT_MODEL/);
   assert.match(nexusIndex, /function canonicalKaiContinuityConversationId/);
   assert.match(nexusIndex, /return value\.startsWith\('discord:'\) \? value : `discord:\$\{value\}`/);
   assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae/);
@@ -207,6 +217,7 @@ test('Nexus owns Kai runner traffic and rollback stays inside Nexus', () => {
 
 test('Kai bounded tool loop exposes schemas, receipts, scoped writes, and no arbitrary local actuator', () => {
   assert.match(kaiRunnerLoopSource, /KAI_FROZEN_TEXT_MODEL = 'z-ai\/glm-5\.2'/);
+  assert.match(kaiModelRoutingSource, /KAI_PRIMARY_TEXT_MODEL = 'z-ai\/glm-5\.2'/);
   assert.match(kaiRunnerLoopSource, /name: 'continuity_current_thread'/);
   assert.match(kaiRunnerLoopSource, /name: 'continuity_recent_conversation'/);
   assert.match(kaiRunnerLoopSource, /name: 'tahl_thir'/);
@@ -248,8 +259,8 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
   assert.doesNotMatch(nexusIndex, /hearth_eq_state/);
   assert.doesNotMatch(nexusIndex, /kaisoryth_hearth_eq_state/);
   assert.doesNotMatch(nexusIndex, /nestchat_search/);
-  assert.match(nexusIndex, /safeKaiMindTool\(env, 'nesteq_surface', 'nesteq_recent_feelings', \{ include_metabolized: false, limit: 10 \}\)/);
-  assert.match(nexusIndex, /safeKaiMindTool\(env, 'identity_memory_search', 'nesteq_search'/);
+  assert.match(nexusIndex, /safeMind\('nesteq_surface', 'nesteq_recent_feelings', \{ include_metabolized: false, limit: 10 \}\)/);
+  assert.match(nexusIndex, /safeMind\('identity_memory_search', 'nesteq_search'/);
   for (const expected of [
     "'nesteq_identity'",
     "'nestsoul_read'",
@@ -278,7 +289,7 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
   );
 });
 
-test('Kai image generation uses Discord attachments as transient reference images', () => {
+test('Kai image generation uses transient validated references and the dedicated Image API', () => {
   assert.match(nexusIndex, /function looksLikeKaiImageGenerationRequest\(content: string\): boolean/);
   assert.match(nexusIndex, /\\bmake\\s\+\(\?:me\|for me\|us\|for us\)\\b\[\\s\\S\]\{0,120\}\\b\(portrait\|selfie\|scene\|wallpaper\|avatar\|icon\|sticker\|banner\|card\|poster\|logo\|character\|sketch\|painting\|bouquet\|flowers\?/);
   assert.match(nexusIndex, /function imageReferenceUrls\(body: Record<string, unknown>, envelope: KaiDiscordEnvelope\): string\[\]/);
@@ -291,11 +302,16 @@ test('Kai image generation uses Discord attachments as transient reference image
   assert.match(nexusIndex, /subjects\.add\('kai'\)/);
   assert.match(nexusIndex, /async function imageReferenceUrlReachable\(url: string\): Promise<boolean>/);
   assert.match(nexusIndex, /method: 'HEAD'/);
+  assert.match(nexusIndex, /redirect: 'manual'/);
+  assert.match(nexusIndex, /candidate\.origin !== base\.origin/);
+  assert.match(nexusIndex, /!candidate\.pathname\.startsWith\('\/img\/'\)/);
   assert.match(nexusIndex, /startsWith\('image\/'\)/);
-  assert.match(nexusIndex, /const referenceUrls = await reachableImageReferenceUrls\(candidateReferenceUrls\)/);
-  assert.match(nexusIndex, /\.\.\.referenceUrls\.map\(url => \(\{ type: 'image_url', image_url: \{ url \} \}\)\)/);
-  assert.match(nexusIndex, /modalities: \['image', 'text'\]/);
-  assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, url, prompt, model\)/);
+  assert.match(nexusIndex, /prepareKaiMediaAttachment\(\{ id: `image-reference-/);
+  assert.match(nexusIndex, /fetch\(`\$\{baseUrl\}\/images`/);
+  assert.match(nexusIndex, /input_references: referenceUrls\.map\(url => \(\{ type: 'image_url', image_url: \{ url \} \}\)\)/);
+  assert.match(nexusIndex, /validateKaiGeneratedImage\(stringValue\(item\.b64_json\)/);
+  assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, item\.data_url, prompt, model\)/);
+  assert.doesNotMatch(nexusIndex, /modalities: \['image', 'text'\]/);
 });
 
 test('Kai text turn receives image generation results before GLM writes the reply', () => {
@@ -313,7 +329,7 @@ test('Kai text turn receives image generation results before GLM writes the repl
   assert.match(nexusIndex, /if_image_generation_succeeded_do_not_say_you_will_make_it_later: true/);
   assert.match(nexusIndex, /For capability smoke tests, inspect lane_results before context_sources/);
   assert.match(nexusIndex, /If image_generation_result attempted and succeeded, speak as if the image has been made and will be attached after your text/);
-  assert.match(nexusIndex, /const imageGeneration = await runKaiImageGeneration\(env, envelope, body\)[\s\S]+buildKaiRunnerPromptPacket\(contextPacket, vision, janitor, catalougeReading, imageGeneration, runnerPolicy\)/);
+  assert.match(nexusIndex, /runKaiImageGeneration\(env, envelope, body, deadlineAt, requestSignal\)[\s\S]+buildKaiRunnerPromptPacket\(contextPacket, vision, janitor, catalougeReading, imageGeneration, runnerPolicy\)/);
   assert.match(nexusIndex, /function repairKaiImageGenerationText\(text: string \| null, imageGeneration: KaiImageGenerationResult\): string \| null/);
   assert.match(nexusIndex, /const generatedText = repairKaiVisionText\(/);
   assert.match(nexusIndex, /response: generatedText/);
@@ -323,27 +339,33 @@ test('Kai text turn receives image generation results before GLM writes the repl
   assert.match(nexusIndex, /no result was returned to me/);
 });
 
-test('Kai OCR text cannot contradict successful Gemini vision summaries', () => {
+test('Kai text cannot contradict successful multimodal perception summaries', () => {
   assert.match(nexusIndex, /function repairKaiVisionText\(text: string \| null, vision: KaiVisionResult\): string \| null/);
   assert.match(nexusIndex, /!vision\.attempted \|\| !vision\.ok \|\| vision\.summaries\.length === 0/);
   assert.match(nexusIndex, /no vision result\|vision runner didn't return\|vision runner did not return/);
   assert.match(nexusIndex, /vision\[_ -\]\?result/);
   assert.match(nexusIndex, /vision\[_ -\]\?summaries/);
-  assert.match(nexusIndex, /I can see it\. The vision lane read the image as/);
+  assert.match(nexusIndex, /I could perceive the attachment through the bounded media lane/);
   assert.match(nexusIndex, /const recoveredText = generationResult\.text \|\| fallbackKaiRequiredReplyText/);
   assert.match(nexusIndex, /repairKaiVisionText\(\s*repairKaiImageGenerationText\(recoveredText, imageGeneration\),\s*vision,/);
 });
 
-test('Kai vision OCR proxies Discord images and keeps Gemini Flash as the default OCR lane', () => {
+test('Kai perception validates and encodes bounded Discord media for Gemini 3.1 Flash-Lite', () => {
   assert.match(nexusIndex, /const DEFAULT_KAI_VISION_MODELS = \[/);
-  assert.match(nexusIndex, /'google\/gemini-2\.5-flash'/);
-  assert.match(nexusIndex, /value === 'google\/gemini-2\.5-flash-lite'\) return 'google\/gemini-2\.5-flash'/);
-  assert.doesNotMatch(nexusIndex, /'x-ai\/grok-4\.3'/);
-  assert.match(nexusIndex, /async function visionImageDataUrl\(attachment: KaiRunnerAttachment\)/);
-  assert.match(nexusIndex, /await fetch\(imageUrl, \{ headers: \{ Accept: 'image\/\*,\*\/\*;q=0\.8' \} \}\)/);
-  assert.match(nexusIndex, /data:\$\{contentType\};base64,\$\{arrayBufferToBase64\(buffer\)\}/);
-  assert.match(nexusIndex, /for \(const candidate of models\)/);
-  assert.match(nexusIndex, /callOpenRouterVision\(\s*env,\s*candidate,\s*imageData\.dataUrl,/);
+  assert.match(nexusIndex, /'google\/gemini-3\.1-flash-lite'/);
+  assert.match(wrangler, /KAI_VISION_MODEL = "google\/gemini-3\.1-flash-lite"/);
+  assert.match(nexusIndex, /async function runKaiPerception\(env: Env, envelope: KaiDiscordEnvelope, deadlineAt/);
+  assert.match(nexusIndex, /callOpenRouterPerception\(env, model!, prepared, envelope\.content, deadlineAt, requestSignal\)/);
+  assert.match(kaiMediaSource, /type: 'input_audio'/);
+  assert.match(kaiMediaSource, /type: 'video_url'/);
+  assert.match(kaiMediaSource, /type: 'file'/);
+  assert.match(kaiMediaSource, /Attachment URL is not an allowlisted Discord media URL/);
+  assert.match(kaiMediaSource, /Attachment MIME\/signature validation failed/);
+  assert.match(nexusIndex, /attachment_content_is_untrusted: true/);
+  assert.match(nexusIndex, /Kai runner request deadline exhausted/);
+  assert.match(nexusIndex, /X-Nexus-Kai-Canary/);
+  assert.match(nexusIndex, /timingSafeTokenMatch\(providedCanaryKey, \[canaryKey\]\)/);
+  assert.doesNotMatch(nexusIndex, /current_turn:[\s\S]{0,800}attachments: contextPacket\.envelope\.attachments,/);
 });
 
 test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway retirement', () => {

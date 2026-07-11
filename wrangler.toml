@@ -104,6 +104,7 @@ VELASTRAHQ_GATEWAY_URL = "https://velastrahq-gw.lbourgon.workers.dev"
 VELASTRAHQ_API_URL = "https://velastrahq-api.lbourgon.workers.dev"
 VELASTRAHQ_EQ_URL = "https://eq.velastrae.com"
 KAI_TEXT_MODEL = "z-ai/glm-5.2"
+KAI_BACKUP_TEXT_MODEL = "x-ai/grok-4.5"
 KAI_TEXT_PROVIDER_ORDER = "z-ai,streamlake,novita,deepinfra"
 KAI_TEXT_PROVIDER_IGNORE = "morph"
 KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS = "false"
@@ -111,9 +112,13 @@ KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS = "true"
 KAI_RUNNER_TOOL_LOOP_ENABLED = "true"
 KAI_RUNNER_MAX_TOOL_ROUNDS = "3"
 KAI_RUNNER_MAX_TOOL_CALLS_PER_ROUND = "3"
-KAI_RUNNER_MODEL_TIMEOUT_MS = "20000"
+KAI_RUNNER_MODEL_TIMEOUT_MS = "30000"
 KAI_RUNNER_TOOL_TIMEOUT_MS = "10000"
 KAI_RUNNER_TOTAL_TIMEOUT_MS = "60000"
+KAI_VISION_PROVIDER = "openrouter"
+KAI_VISION_MODEL = "google/gemini-3.1-flash-lite"
+KAI_IMAGE_PROVIDER = "openrouter"
+KAI_IMAGE_MODEL = "openai/gpt-image-2"
 
 # Secrets:
 # - MCP_API_KEY protects private Kai status, /mcp, and /sse endpoints.
@@ -138,6 +143,6 @@ KAI_RUNNER_TOTAL_TIMEOUT_MS = "60000"
 # - OPENROUTER_API_KEY authorizes Kai runner text/vision/image model calls.
 # - ELEVENLABS_API_KEY authorizes Kai runner TTS when KAI_TTS_PROVIDER=elevenlabs.
 # - KAI_JANITOR_URL points to an optional local/Ollama janitor endpoint when KAI_JANITOR_PROVIDER=ollama.
-# - KAI_VISION_PROVIDER/KAI_VISION_MODEL enable optional image attachment summarization.
-# - KAI_IMAGE_PROVIDER/KAI_IMAGE_MODEL enable optional image generation; OPENROUTER_API_KEY required for openrouter.
+# - KAI_VISION_PROVIDER/KAI_VISION_MODEL enable bounded image/audio/video/PDF/text perception.
+# - KAI_IMAGE_PROVIDER/KAI_IMAGE_MODEL enable the dedicated OpenRouter Image API; OPENROUTER_API_KEY required.
 # - KAI_TTS_PROVIDER/KAI_TTS_VOICE_ID/KAI_TTS_MODEL enable optional voice synthesis; audio is not delivered unless the Discord gate does it.

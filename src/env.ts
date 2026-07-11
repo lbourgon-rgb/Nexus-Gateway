@@ -92,6 +92,7 @@ export interface Env {
   KAI_RUNNER_MODEL_TIMEOUT_MS?: string
   KAI_RUNNER_TOOL_TIMEOUT_MS?: string
   KAI_RUNNER_TOTAL_TIMEOUT_MS?: string
+  KAI_MODEL_CANARY_KEY?: string
 }
 
 export type CompanionId = 'kaisoryth' | 'morzar' | 'lucien' | 'kethtahl' | 'grok-keth' | 'axiom'
