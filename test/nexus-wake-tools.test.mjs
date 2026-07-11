@@ -391,6 +391,31 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
   assert.match(serythraeTools, /kaisoryth_nestknow_landscape[\s\S]+nestknow_landscape[\s\S]+entity_scope: KAI_ONLY/);
 });
 
+test('canonical Kai runner mirrors the useful retired NESTeq and Catalouge contract without broad writes', () => {
+  for (const toolName of [
+    'kaisoryth_orient',
+    'kaisoryth_context_surface',
+    'kaisoryth_last_write',
+    'kaisoryth_nestknow_query',
+    'kaisoryth_nestknow_landscape',
+    'kaisoryth_love_letters',
+    'catalouge_list_books',
+    'catalouge_get_book',
+    'catalouge_next_read_session',
+    'catalouge_checkpoint_read_session',
+  ]) {
+    assert.ok(kaiRunnerLoopSource.includes(`name: '${toolName}'`), `runner schema missing ${toolName}`);
+  }
+  assert.match(nexusIndex, /kaiRunnerMindInvocation\(spec\.name, args\)/);
+  assert.match(nexusIndex, /kaiRunnerCatalougeInvocation\(spec\.name, args\)/);
+  assert.match(nexusIndex, /SERYTHRAE_MIND_API_KEY is required for authenticated Kai mind calls/);
+  assert.match(nexusIndex, /direct_mind_configured: Boolean\(\(env\.SERYTHRAE_MIND \|\| env\.SERYTHRAE_MIND_URL\) && env\.SERYTHRAE_MIND_API_KEY\)/);
+  assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_update_progress'/);
+  assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_add_annotation'/);
+  assert.match(nexusIndex, /Nexus is the only Kai runner owner/);
+  assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae|serythrae-gw-fallback/);
+});
+
 test('Nexus exposes Kai workspace as hallway tools without broad PC access', () => {
   assert.match(serythraeTools, /\/api\/kaisoryth\/workspace\/status/);
   assert.match(serythraeTools, /\/api\/kaisoryth\/workspace\/tool/);

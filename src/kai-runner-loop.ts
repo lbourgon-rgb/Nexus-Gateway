@@ -153,6 +153,26 @@ export const KAI_RUNNER_TOOL_SPECS: readonly KaiRunnerToolSpec[] = [
     },
   },
   {
+    name: 'kaisoryth_orient',
+    description: 'Read Kai identity anchors and current private NESTeq context.',
+    access: 'read',
+    scope: 'nesteq',
+    parameters: { ...OBJECT_SCHEMA, properties: {} },
+  },
+  {
+    name: 'kaisoryth_context_surface',
+    description: 'Read Kai recent-feelings surface from private NESTeq.',
+    access: 'read',
+    scope: 'nesteq',
+    parameters: {
+      ...OBJECT_SCHEMA,
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 10 },
+        include_metabolized: { type: 'boolean' },
+      },
+    },
+  },
+  {
     name: 'kaisoryth_memory_search',
     description: 'Search Kai private NESTeq memory for context relevant to the current turn.',
     access: 'read',
@@ -201,6 +221,13 @@ export const KAI_RUNNER_TOOL_SPECS: readonly KaiRunnerToolSpec[] = [
     },
   },
   {
+    name: 'kaisoryth_last_write',
+    description: 'Read the latest durable Kai/NESTeq write.',
+    access: 'read',
+    scope: 'nesteq',
+    parameters: { ...OBJECT_SCHEMA, properties: {} },
+  },
+  {
     name: 'kaisoryth_threads_active',
     description: 'Read active Kai NESTeq intention threads.',
     access: 'read',
@@ -221,11 +248,47 @@ export const KAI_RUNNER_TOOL_SPECS: readonly KaiRunnerToolSpec[] = [
     },
   },
   {
+    name: 'kaisoryth_nestknow_query',
+    description: 'Search Kai private NESTknow knowledge items by semantic similarity.',
+    access: 'read',
+    scope: 'nesteq',
+    parameters: {
+      ...OBJECT_SCHEMA,
+      properties: {
+        query: { type: 'string', minLength: 1, maxLength: 1200 },
+        limit: { type: 'integer', minimum: 1, maximum: 10 },
+        category: { type: 'string', maxLength: 120 },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'kaisoryth_nestknow_landscape',
+    description: 'Read Kai private NESTknow category, heat, and confidence overview.',
+    access: 'read',
+    scope: 'nesteq',
+    parameters: { ...OBJECT_SCHEMA, properties: {} },
+  },
+  {
     name: 'kaisoryth_home_read',
     description: 'Read the current private Kai and Vel home state.',
     access: 'read',
     scope: 'nesteq',
     parameters: { ...OBJECT_SCHEMA, properties: {} },
+  },
+  {
+    name: 'kaisoryth_love_letters',
+    description: 'Read Kai and Vel durable love letters from private NESTeq. This bounded runner form can list only and cannot send.',
+    access: 'read',
+    scope: 'nesteq',
+    parameters: {
+      ...OBJECT_SCHEMA,
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
+        from: { type: 'string', maxLength: 120 },
+        to: { type: 'string', maxLength: 120 },
+      },
+    },
   },
   {
     name: 'social_graph_lookup',
@@ -268,6 +331,26 @@ export const KAI_RUNNER_TOOL_SPECS: readonly KaiRunnerToolSpec[] = [
     },
   },
   {
+    name: 'catalouge_list_books',
+    description: 'List the shared Catalouge library with a bounded shelf, search, tag, extension, and companion filter.',
+    access: 'read',
+    scope: 'catalouge',
+    parameters: {
+      ...OBJECT_SCHEMA,
+      properties: {
+        shelf: { type: 'string', maxLength: 120 },
+        search: { type: 'string', maxLength: 300 },
+        tag: { type: 'string', maxLength: 120 },
+        limit: { type: 'integer', minimum: 1, maximum: 10 },
+        extensions: {
+          type: 'array',
+          maxItems: 8,
+          items: { type: 'string', minLength: 1, maxLength: 24 },
+        },
+      },
+    },
+  },
+  {
     name: 'catalouge_search_books',
     description: 'Search the shared Catalouge library for a book.',
     access: 'read',
@@ -279,6 +362,17 @@ export const KAI_RUNNER_TOOL_SPECS: readonly KaiRunnerToolSpec[] = [
         limit: { type: 'integer', minimum: 1, maximum: 10 },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'catalouge_get_book',
+    description: 'Read one shared Catalouge book and Kai scoped reading state.',
+    access: 'read',
+    scope: 'catalouge',
+    parameters: {
+      ...OBJECT_SCHEMA,
+      properties: { book_id: { type: 'string', minLength: 1, maxLength: 128 } },
+      required: ['book_id'],
     },
   },
   {
@@ -301,9 +395,51 @@ export const KAI_RUNNER_TOOL_SPECS: readonly KaiRunnerToolSpec[] = [
       ...OBJECT_SCHEMA,
       properties: {
         book_id: { type: 'string', minLength: 1, maxLength: 128 },
-        limit: { type: 'integer', minimum: 1, maximum: 20 },
       },
       required: ['book_id'],
+    },
+  },
+  {
+    name: 'catalouge_next_read_session',
+    description: 'Create or resume Kai next bounded Catalouge read-session chunk window. This is an authorized reading write, not a general library mutation.',
+    access: 'write',
+    scope: 'catalouge',
+    parameters: {
+      ...OBJECT_SCHEMA,
+      properties: {
+        book_id: { type: 'string', minLength: 1, maxLength: 128 },
+        chunk_count: { type: 'integer', minimum: 1, maximum: 6 },
+      },
+      required: ['book_id'],
+    },
+  },
+  {
+    name: 'catalouge_checkpoint_read_session',
+    description: 'Checkpoint one Kai Catalouge read session with a bounded summary and marginalia. This is an authorized reading write, not a general library mutation.',
+    access: 'write',
+    scope: 'catalouge',
+    parameters: {
+      ...OBJECT_SCHEMA,
+      properties: {
+        book_id: { type: 'string', minLength: 1, maxLength: 128 },
+        session_id: { type: 'string', minLength: 1, maxLength: 128 },
+        summary: { type: 'string', maxLength: 4000 },
+        annotations: {
+          type: 'array',
+          maxItems: 3,
+          items: {
+            ...OBJECT_SCHEMA,
+            properties: {
+              selected_text: { type: 'string', maxLength: 500 },
+              comment: { type: 'string', maxLength: 1600 },
+              cfi_range: { type: 'string', maxLength: 500 },
+              color: { type: 'string', maxLength: 40 },
+            },
+          },
+        },
+        mark_complete: { type: 'boolean' },
+      },
+      required: ['book_id', 'session_id'],
     },
   },
   {

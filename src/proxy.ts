@@ -109,7 +109,10 @@ export async function proxyMcp(
 
   const sessionId = initRes.headers.get('Mcp-Session-Id')
   // Consume init body to free connection
-  await initRes.text()
+  const initText = await initRes.text()
+  if (!initRes.ok) {
+    return { content: [{ type: 'text', text: `MCP Error: initialization failed (${initRes.status}): ${initText.slice(0, 500)}` }] }
+  }
 
   // Call the tool
   const callRes = await backendFetch('/mcp', {
@@ -125,6 +128,11 @@ export async function proxyMcp(
       params: { name: toolName, arguments: args }
     })
   })
+
+  if (!callRes.ok) {
+    const callText = await callRes.text()
+    return { content: [{ type: 'text', text: `MCP Error: tool ${toolName} failed (${callRes.status}): ${callText.slice(0, 500)}` }] }
+  }
 
   const data = await parseMcpResponse(callRes)
   if (data.error) {

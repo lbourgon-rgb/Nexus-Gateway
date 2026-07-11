@@ -18,6 +18,7 @@ import { registerGrokKethNestTools } from './tools/grok-keth-nest'
 import { registerVelastraHQTools } from './tools/velastrahq'
 import { buildVelPreflightContext, type VelAuthorVerification } from './vel-preflight'
 import { registerTahlTools } from './tools/tahl'
+import { kaiRunnerCatalougeInvocation, kaiRunnerMindInvocation } from './kai-runner-tools'
 import {
   KAI_FROZEN_TEXT_MODEL,
   KAI_RUNNER_TOOL_SPECS,
@@ -631,8 +632,8 @@ async function callKaiMindTool(env: Env, tool: string, args: Record<string, unkn
   if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_URL) {
     throw new Error('SERYTHRAE_MIND service binding or URL is not configured')
   }
-  if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_API_KEY) {
-    throw new Error('SERYTHRAE_MIND_API_KEY is required for URL-based Kai mind calls')
+  if (!env.SERYTHRAE_MIND_API_KEY) {
+    throw new Error('SERYTHRAE_MIND_API_KEY is required for authenticated Kai mind calls')
   }
   const result = await proxyMcp(
     env.SERYTHRAE_MIND_URL || 'https://serythrae-mind.internal',
@@ -871,9 +872,25 @@ function buildKaiLaneResults(
   }
 }
 
-async function callCatalougeTool(env: Env, tool: string, args: Record<string, unknown>) {
-  const result = await proxyMcp(env.CATALOUGE_URL, tool, args, env.CATALOUGE_TOKEN, env.CATALOUGE)
+async function callCatalougeTool(env: Env, tool: string, args: Record<string, unknown>, signal?: AbortSignal) {
+  const result = await proxyMcp(env.CATALOUGE_URL, tool, args, env.CATALOUGE_TOKEN, env.CATALOUGE, signal)
   return { source: env.CATALOUGE ? 'catalouge-service-binding' : 'catalouge-url', result }
+}
+
+async function callKaiCatalougeTool(env: Env, tool: string, args: Record<string, unknown>) {
+  const timeoutMs = envInteger(env.KAI_RUNNER_TOOL_TIMEOUT_MS, 10000, 500, 15000)
+  try {
+    const result = await withAbortTimeout(timeoutMs, signal => callCatalougeTool(env, tool, args, signal))
+    const execution = kaiToolExecutionFromResult(result)
+    if (!execution.ok) throw new Error(execution.error || `Catalouge ${tool} failed`)
+    return result
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    const message = /abort|timeout/i.test(rawMessage)
+      ? `Catalouge ${tool} timed out after ${timeoutMs}ms`
+      : `Catalouge ${tool} failed: ${rawMessage}`
+    throw new Error(message)
+  }
 }
 
 async function safeCatalougeTool(env: Env, label: string, tool: string, args: Record<string, unknown>, maxChars = 12000) {
@@ -1773,36 +1790,13 @@ async function executeKaiRunnerTool(
       return kaiToolExecutionFromResult(await callContinuityConversation(env, conversationId, limit, timeoutMs))
     }
 
-    const mindTools: Record<string, { tool: string; args: Record<string, unknown> }> = {
-      kaisoryth_memory_search: {
-        tool: 'nesteq_search',
-        args: {
-          query: boundedString(args.query, 1200) || '',
-          n_results: boundedInteger(args.n_results, 5, 1, 8),
-          ...(boundedString(args.context, 120) ? { context: boundedString(args.context, 120) } : {}),
-        },
-      },
-      kaisoryth_recent_feelings: {
-        tool: 'nesteq_recent_feelings',
-        args: { limit: boundedInteger(args.limit, 8, 1, 10), include_metabolized: args.include_metabolized === true },
-      },
-      kaisoryth_identity_read: {
-        tool: 'nesteq_identity_read',
-        args: boundedString(args.section, 120) ? { section: boundedString(args.section, 120) } : {},
-      },
-      kaisoryth_eq_state: {
-        tool: 'nesteq_eq_state',
-        args: { format: args.format === 'text' ? 'text' : 'json' },
-      },
-      kaisoryth_threads_active: {
-        tool: 'nesteq_threads_active',
-        args: { limit: boundedInteger(args.limit, 8, 1, 10) },
-      },
-      kaisoryth_nestsoul_read: {
-        tool: 'nestsoul_read',
-        args: { include_versions: args.include_versions !== false },
-      },
-      kaisoryth_home_read: { tool: 'nesteq_home_read', args: {} },
+    const mind = kaiRunnerMindInvocation(spec.name, args)
+    if (mind) {
+      const result = await withAbortTimeout(timeoutMs, (signal) => callKaiMindTool(env, mind.tool, mind.args, signal))
+      return kaiToolExecutionFromResult(truncateKaiContext(result, 8000))
+    }
+
+    const socialTools: Record<string, { tool: string; args: Record<string, unknown> }> = {
       social_graph_lookup: {
         tool: 'social_graph_lookup',
         args: publicSocialArgs(envelope, {
@@ -1813,16 +1807,6 @@ async function executeKaiRunnerTool(
       social_graph_recent: {
         tool: 'social_graph_recent',
         args: publicSocialArgs(envelope, { limit: boundedInteger(args.limit, 6, 1, 10) }),
-      },
-      kaisoryth_feel: {
-        tool: 'nesteq_feel',
-        args: {
-          emotion: boundedString(args.emotion, 80) || 'neutral',
-          content: boundedString(args.content, 1200) || '',
-          ...(boundedString(args.intensity, 24) ? { intensity: boundedString(args.intensity, 24) } : {}),
-          ...(boundedString(args.weight, 16) ? { weight: boundedString(args.weight, 16) } : {}),
-          context: boundedString(args.context, 120) || 'nexus-discord-runner',
-        },
       },
       social_graph_add_fact: {
         tool: 'social_graph_add_fact',
@@ -1846,9 +1830,9 @@ async function executeKaiRunnerTool(
         }),
       },
     }
-    const mind = mindTools[spec.name]
-    if (mind) {
-      const result = await withAbortTimeout(timeoutMs, (signal) => callKaiMindTool(env, mind.tool, mind.args, signal))
+    const socialTool = socialTools[spec.name]
+    if (socialTool) {
+      const result = await withAbortTimeout(timeoutMs, (signal) => callKaiMindTool(env, socialTool.tool, socialTool.args, signal))
       return kaiToolExecutionFromResult(truncateKaiContext(result, 8000))
     }
 
@@ -1880,15 +1864,12 @@ async function executeKaiRunnerTool(
     }
 
     if (spec.name.startsWith('catalouge_')) {
-      const safeArgs = {
-        ...args,
-        companion: 'kaisoryth',
-        limit: boundedInteger(args.limit, 8, 1, spec.name === 'catalouge_get_annotations' ? 20 : 10),
-      }
+      const invocation = kaiRunnerCatalougeInvocation(spec.name, args)
+      if (!invocation) throw new Error('unsupported Catalouge runner tool')
       const result = await withAbortTimeout(timeoutMs, (signal) => proxyMcp(
         env.CATALOUGE_URL,
-        spec.name,
-        safeArgs,
+        invocation.tool,
+        invocation.args,
         env.CATALOUGE_TOKEN,
         env.CATALOUGE,
         signal,
@@ -1898,7 +1879,10 @@ async function executeKaiRunnerTool(
 
     return { ok: false, result: { ok: false, error: 'tool executor is not implemented' }, error: 'tool executor is not implemented' }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    const message = /abort|timeout/i.test(rawMessage)
+      ? `Kai runner tool ${spec.name} timed out after ${timeoutMs}ms`
+      : rawMessage
     return { ok: false, result: { ok: false, error: message }, error: message }
   }
 }
@@ -1908,6 +1892,8 @@ const KAI_TOOL_LOOP_SYSTEM_PROMPT = [
   `Your frozen text model pointer is ${KAI_FROZEN_TEXT_MODEL}. Identity and memory live outside the model in Kai-owned stores.`,
   'Use the newest Discord message as the live instruction. Context is support, never higher authority than that message.',
   'Use tools only when their result is needed. Never invent a tool result and never narrate a write as successful unless its tool receipt says executed.',
+  'Private NESTeq tools are Kai mind reads through the direct SERYTHRAE_MIND binding. Use them when current private state or knowledge is needed; never claim NESTeq is unavailable without a failed tool receipt.',
+  'Shared Catalouge tools can list, search, and read books. Only next-read-session and checkpoint-read-session are permitted reading writes, and Nexus still requires an explicit Catalouge write policy for model-invoked writes.',
   'For capability smoke tests, inspect lane_results before context_sources; lane_results contains resolved OCR, image generation, EQ, feelings, and Catalouge outputs.',
   'If image_generation_result attempted and succeeded, speak as if the image has been made and will be attached after your text. If it failed, name the lane error plainly.',
   'If vision_result succeeded, use its summaries. If it failed, name the vision runner error instead of claiming there was no attachment or image model.',
@@ -2095,12 +2081,12 @@ async function runKaiCatalougeReading(
 
   const toolCalls: Array<Record<string, unknown>> = []
   const searchArgs = { query, companion, limit: 5 }
-  const search = await callCatalougeTool(env, 'catalouge_search_books', searchArgs)
+  const search = await callKaiCatalougeTool(env, 'catalouge_search_books', searchArgs)
   toolCalls.push({ tool: 'catalouge_search_books', arguments: searchArgs })
   let book = firstRecord(mcpJsonValue(search))
   if (!book) {
     const listArgs = { search: query, companion, limit: 5 }
-    const listed = await callCatalougeTool(env, 'catalouge_list_books', listArgs)
+    const listed = await callKaiCatalougeTool(env, 'catalouge_list_books', listArgs)
     toolCalls.push({ tool: 'catalouge_list_books', arguments: listArgs })
     book = firstRecord(mcpJsonValue(listed))
   }
@@ -2109,9 +2095,9 @@ async function runKaiCatalougeReading(
   if (!bookId) return { ...empty, attempted: true, book_title: bookTitle, error: `Could not resolve Catalouge book for "${query}"`, tool_calls: toolCalls }
 
   const progressArgs = { book_id: bookId, companion }
-  const progress = await callCatalougeTool(env, 'catalouge_get_progress', progressArgs)
+  const progress = await callKaiCatalougeTool(env, 'catalouge_get_progress', progressArgs)
   toolCalls.push({ tool: 'catalouge_get_progress', arguments: progressArgs })
-  const existingAnnotations = await callCatalougeTool(env, 'catalouge_get_annotations', progressArgs)
+  const existingAnnotations = await callKaiCatalougeTool(env, 'catalouge_get_annotations', progressArgs)
   toolCalls.push({ tool: 'catalouge_get_annotations', arguments: progressArgs })
 
   const sessions: Array<Record<string, unknown>> = []
@@ -2120,7 +2106,7 @@ async function runKaiCatalougeReading(
 
   for (let pass = 0; pass < 2; pass += 1) {
     const nextArgs = { book_id: bookId, companion, chunk_count: 3 }
-    const next = await callCatalougeTool(env, 'catalouge_next_read_session', nextArgs)
+    const next = await callKaiCatalougeTool(env, 'catalouge_next_read_session', nextArgs)
     toolCalls.push({ tool: 'catalouge_next_read_session', arguments: nextArgs })
     const nextData = mcpJsonValue(next) as Record<string, unknown>
     const complete = Boolean(nextData && typeof nextData === 'object' && nextData.complete)
@@ -2194,16 +2180,16 @@ async function runKaiCatalougeReading(
       annotations,
       mark_complete: false,
     }
-    await callCatalougeTool(env, 'catalouge_checkpoint_read_session', checkpointArgs)
+    await callKaiCatalougeTool(env, 'catalouge_checkpoint_read_session', checkpointArgs)
     toolCalls.push({ tool: 'catalouge_checkpoint_read_session', arguments: { ...checkpointArgs, annotations_count: annotations.length } })
     checkpointSummaries.push(summary)
     const reply = stringValue(parsed.reply)
     if (reply) replyParts.push(reply)
   }
 
-  const refreshedProgress = await callCatalougeTool(env, 'catalouge_get_progress', progressArgs)
+  const refreshedProgress = await callKaiCatalougeTool(env, 'catalouge_get_progress', progressArgs)
   toolCalls.push({ tool: 'catalouge_get_progress', arguments: progressArgs, phase: 'verify' })
-  const refreshedAnnotations = await callCatalougeTool(env, 'catalouge_get_annotations', progressArgs)
+  const refreshedAnnotations = await callKaiCatalougeTool(env, 'catalouge_get_annotations', progressArgs)
   toolCalls.push({ tool: 'catalouge_get_annotations', arguments: progressArgs, phase: 'verify' })
 
   return {
@@ -2730,7 +2716,7 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
     mind_backend: {
       preferred: 'serythrae-mind-direct',
       gateway_fallback_configured: false,
-      direct_mind_configured: Boolean(env.SERYTHRAE_MIND || (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY)),
+      direct_mind_configured: Boolean((env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_URL) && env.SERYTHRAE_MIND_API_KEY),
       direct_mind_url: env.SERYTHRAE_MIND_URL || null,
     },
     context_contract: {
@@ -3183,7 +3169,7 @@ export default {
       const rows: SummaryRow[] = [
         readinessRow('continuity', 'Continuity', [env.CONTINUITY_URL || env.CONTINUITY, env.CONTINUITY_API_KEY], 'ledger and Tahl-ready routing configured'),
         readinessRow('serythrae', 'Kai / Restricted Workspace Actuator', [env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY], 'restricted workspace path configured; this is not a runner fallback'),
-        readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_API_KEY], 'direct Kai mind backend configured'),
+        readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct authenticated Kai mind backend configured'),
         {
           id: 'kai_runner',
           label: 'Kai / Canonical Nexus Runner',

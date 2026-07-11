@@ -190,6 +190,60 @@ test('forced-final OpenRouter body preserves tool schemas and forbids another to
   assert.deepEqual(body.messages, messages);
 });
 
+test('canonical runner discovers the restored NESTeq and bounded Catalouge contract', () => {
+  const specs = new Map(runner.KAI_RUNNER_TOOL_SPECS.map((spec) => [spec.name, spec]));
+  for (const name of [
+    'kaisoryth_orient',
+    'kaisoryth_context_surface',
+    'kaisoryth_last_write',
+    'kaisoryth_nestknow_query',
+    'kaisoryth_nestknow_landscape',
+    'kaisoryth_love_letters',
+    'catalouge_list_books',
+    'catalouge_get_book',
+    'catalouge_next_read_session',
+    'catalouge_checkpoint_read_session',
+  ]) {
+    assert.ok(specs.has(name), `missing canonical runner tool ${name}`);
+  }
+
+  assert.equal(specs.get('kaisoryth_love_letters').access, 'read');
+  assert.deepEqual(Object.keys(specs.get('kaisoryth_love_letters').parameters.properties).sort(), ['from', 'limit', 'to']);
+  assert.equal(specs.get('catalouge_next_read_session').access, 'write');
+  assert.equal(specs.get('catalouge_checkpoint_read_session').access, 'write');
+  assert.equal(specs.get('catalouge_checkpoint_read_session').scope, 'catalouge');
+  assert.equal(specs.has('catalouge_update_progress'), false);
+  assert.equal(specs.has('catalouge_add_annotation'), false);
+});
+
+test('Catalouge reading writes require explicit Catalouge scope and execute only after authorization', async () => {
+  for (const [authorized, expectedStatus, expectedExecutions] of [[false, 'refused', 0], [true, 'executed', 1]]) {
+    let modelTurns = 0;
+    let executions = 0;
+    const result = await runner.runKaiRunnerToolLoop(baseOptions({
+      policy: authorized ? policy({
+        write_allowed: true,
+        write_scopes: ['catalouge'],
+        write_reason_code: 'explicit-user-request',
+      }) : policy(),
+      call_model: async () => {
+        modelTurns += 1;
+        return modelTurns === 1
+          ? modelToolCall('catalouge_next_read_session', { book_id: 'book-fixture', chunk_count: 3 })
+          : { content: 'I handled only the authorized Catalouge reading step.', tool_calls: [] };
+      },
+      execute_tool: async ({ spec }) => {
+        executions += 1;
+        assert.equal(spec.scope, 'catalouge');
+        return { ok: true, result: { session_id: 'session-fixture' } };
+      },
+    }));
+    assert.equal(result.ok, true);
+    assert.equal(result.receipts[0].status, expectedStatus);
+    assert.equal(executions, expectedExecutions);
+  }
+});
+
 test('same-model retries share one injected timeout budget', () => {
   let now = 1_000;
   const remaining = runner.createKaiAttemptBudget(20_000, () => now);
