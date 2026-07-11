@@ -18,6 +18,7 @@ import { registerGrokKethNestTools } from './tools/grok-keth-nest'
 import { registerVelastraHQTools } from './tools/velastrahq'
 import { buildVelPreflightContext, type VelAuthorVerification } from './vel-preflight'
 import { registerTahlTools } from './tools/tahl'
+import { registerAxiomBoardTools } from './tools/axiom-board'
 import { kaiRunnerCatalougeInvocation, kaiRunnerMindInvocation } from './kai-runner-tools'
 import {
   KAI_FROZEN_TEXT_MODEL,
@@ -47,6 +48,7 @@ export class NexusGateway extends McpAgent<Env> {
   async init() {
     registerContinuityTools(this.server, this.env)
     registerTahlTools(this.server, this.env)
+    registerAxiomBoardTools(this.server, this.env)
     registerSerythraeTools(this.server, this.env)
     registerGrokKethNestTools(this.server, this.env)
     if (this.env.VELASTRAHQ_GATEWAY_URL || this.env.VELASTRAHQ_GATEWAY || this.env.VELASTRAHQ_API_URL || this.env.VELASTRAHQ_API) registerVelastraHQTools(this.server, this.env)
