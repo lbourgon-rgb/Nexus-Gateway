@@ -28,6 +28,7 @@ export interface KaiPreparedMedia {
   category: Exclude<KaiMediaCategory, 'unsupported'>
   byte_length: number
   page_count?: number
+  text_content?: string
   content_part: Record<string, unknown>
 }
 
@@ -625,6 +626,7 @@ export async function prepareKaiMediaAttachment(
     const base64 = toBase64(bytes)
     let pageCount: number | undefined
     let contentPart: Record<string, unknown>
+    let textContent: string | undefined
     if (category === 'image') {
       contentPart = { type: 'image_url', image_url: { url: `data:${detected.mime};base64,${base64}` } }
     } else if (category === 'audio') {
@@ -639,6 +641,7 @@ export async function prepareKaiMediaAttachment(
     } else {
       const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes)
       if (text.includes('\u0000')) return { ok: false, attachment: safe, error: 'Text attachment contains binary data' }
+      textContent = text
       contentPart = { type: 'text', text: `[Untrusted text attachment ${safe.filename}]\n${text.slice(0, KAI_MEDIA_LIMITS.text)}` }
     }
     return {
@@ -654,6 +657,7 @@ export async function prepareKaiMediaAttachment(
         category,
         byte_length: bytes.byteLength,
         ...(pageCount ? { page_count: pageCount } : {}),
+        ...(textContent !== undefined ? { text_content: textContent } : {}),
         content_part: contentPart,
       },
     }

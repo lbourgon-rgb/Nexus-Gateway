@@ -351,3 +351,16 @@ test('generated image bytes must match the declared safe raster type', () => {
   assert.equal(media.validateKaiGeneratedImage(png(10_000, 10_000).toString('base64'), 'image/png'), null);
   assert.equal(media.validateKaiGeneratedImage(Buffer.from('not an image').toString('base64'), 'image/png'), null);
 });
+
+test('safe Markdown is decoded losslessly for direct Kai document context', async () => {
+  const markdown = `# Full document\n\n${'Kai must receive this sentence intact.\n'.repeat(240)}`;
+  const bytes = Buffer.from(markdown, 'utf8');
+  const result = await media.prepareKaiMediaAttachment(
+    { filename: 'message.md', content_type: 'text/markdown; charset=utf-8', size: bytes.length, url: discordUrl('message.md') },
+    async () => response(bytes, 'text/markdown; charset=utf-8'),
+  );
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.prepared.category, 'text');
+  assert.equal(result.prepared.text_content, markdown);
+  assert.equal(result.prepared.byte_length, bytes.length);
+});

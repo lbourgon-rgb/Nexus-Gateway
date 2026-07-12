@@ -251,7 +251,8 @@ test('Nexus preserves Discord engagement and GLM output safeguards from the reti
   assert.match(kaiRunnerLoopSource, /generic Chinese refusal instead of Kai voice/);
   assert.match(kaiRunnerLoopSource, /finish_reason=length; retrying because Kai text was truncated/);
   assert.match(nexusIndex, /same-model retry exhausted/);
-  assert.match(nexusIndex, /function fallbackKaiRequiredReplyText/);
+  assert.doesNotMatch(nexusIndex, /fallbackKaiRequiredReplyText/);
+  assert.match(nexusIndex, /const recoveredText = generationResult\.text/);
 });
 
 test('Kai runner context loads identity, soul, skills, and canon search before composition', () => {
@@ -342,11 +343,12 @@ test('Kai text turn receives image generation results before GLM writes the repl
 test('Kai text cannot contradict successful multimodal perception summaries', () => {
   assert.match(nexusIndex, /function repairKaiVisionText\(text: string \| null, vision: KaiVisionResult\): string \| null/);
   assert.match(nexusIndex, /!vision\.attempted \|\| !vision\.ok \|\| vision\.summaries\.length === 0/);
+  assert.match(nexusIndex, /if \(!trimmed\) return text/);
   assert.match(nexusIndex, /no vision result\|vision runner didn't return\|vision runner did not return/);
   assert.match(nexusIndex, /vision\[_ -\]\?result/);
   assert.match(nexusIndex, /vision\[_ -\]\?summaries/);
   assert.match(nexusIndex, /I could perceive the attachment through the bounded media lane/);
-  assert.match(nexusIndex, /const recoveredText = generationResult\.text \|\| fallbackKaiRequiredReplyText/);
+  assert.match(nexusIndex, /const recoveredText = generationResult\.text/);
   assert.match(nexusIndex, /repairKaiVisionText\(\s*repairKaiImageGenerationText\(recoveredText, imageGeneration\),\s*vision,/);
 });
 
@@ -355,7 +357,11 @@ test('Kai perception validates and encodes bounded Discord media for Gemini 3.1 
   assert.match(nexusIndex, /'google\/gemini-3\.1-flash-lite'/);
   assert.match(wrangler, /KAI_VISION_MODEL = "google\/gemini-3\.1-flash-lite"/);
   assert.match(nexusIndex, /async function runKaiPerception\(env: Env, envelope: KaiDiscordEnvelope, deadlineAt/);
-  assert.match(nexusIndex, /callOpenRouterPerception\(env, model!, prepared, envelope\.content, deadlineAt, requestSignal\)/);
+  assert.match(nexusIndex, /callOpenRouterPerception\(env, model!, modelPrepared, envelope\.content, deadlineAt, requestSignal\)/);
+  assert.match(nexusIndex, /item\.category !== 'text'/);
+  assert.match(nexusIndex, /document_inputs: vision\?\.documents\?\.length/);
+  assert.match(nexusIndex, /provenance: 'discord-attachment-direct-utf8'/);
+  assert.match(nexusIndex, /Safe UTF-8 text and Markdown are provided directly in lane_results\.document_inputs/);
   assert.match(kaiMediaSource, /type: 'input_audio'/);
   assert.match(kaiMediaSource, /type: 'video_url'/);
   assert.match(kaiMediaSource, /type: 'file'/);

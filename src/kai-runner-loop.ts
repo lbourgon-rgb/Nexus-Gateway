@@ -612,7 +612,7 @@ export function kaiOpenRouterToolRequestBody(input: {
     tools: input.tools,
     tool_choice: input.force_final ? 'none' : 'auto',
     temperature: 0.7,
-    max_tokens: input.force_final ? 900 : 1000,
+    max_tokens: input.force_final ? 1_800 : 2_000,
   }
 }
 
