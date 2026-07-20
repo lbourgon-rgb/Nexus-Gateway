@@ -3229,11 +3229,49 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   })
 }
 
+async function kaiRunnerPresenceGate(env: Env): Promise<Response | null> {
+  try {
+    const presence = recordValue(await callContinuityJson(env, '/runner-presence/kaisoryth'))
+    if (presence.active === true) {
+      // Deliberately body-free: this receipt must never echo a message, prompt,
+      // candidate, or private context. The decision header is the stable wire
+      // contract for Discord and supervised probes.
+      return new Response(null, {
+        status: 202,
+        headers: {
+          ...CORS,
+          'Cache-Control': 'no-store',
+          'X-Nexus-Kai-Decision': 'delegated_to_runner',
+        },
+      })
+    }
+    if (presence.active === false) return null
+    return new Response(JSON.stringify({
+      ok: false,
+      error: 'Kai runner presence state was unavailable or malformed; Nexus fallback stayed closed.',
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  } catch (error) {
+    console.error('Kai runner presence check failed', error)
+    return new Response(JSON.stringify({
+      ok: false,
+      error: 'Kai runner presence state was unavailable; Nexus fallback stayed closed.',
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    })
+  }
+}
+
 async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
-  // Nexus is the only Kai runner owner. Serythrae remains a private mind store
-  // and restricted workspace actuator, never a runner fallback.
+  // Nexus is the fallback owner only while Continuity proves that no local
+  // companion-scoped runner presence lease is live.
   const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeRequiredMcpBearer(request, env)
   if (unauthorized) return unauthorized
+  const presenceGate = await kaiRunnerPresenceGate(env)
+  if (presenceGate) return presenceGate
   return kaiRunnerRunLocal(request, env)
 }
 

@@ -185,7 +185,7 @@ test('Nexus routes Kai mind calls directly and retains Serythrae only for the re
   assert.doesNotMatch(serythraeTools, /serythrae-gw-fallback/);
 });
 
-test('Nexus owns Kai runner traffic and rollback stays inside Nexus', () => {
+test('Nexus owns Kai fallback traffic only while no local runner presence is live', () => {
   assert.doesNotMatch(envSource, /KAI_RUNNER_ROUTE\?: string/);
   assert.doesNotMatch(envSource, /KAI_RUNNER_FORWARD_FALLBACK\?: string/);
   assert.match(wrangler, /KAI_TEXT_MODEL = "z-ai\/glm-5\.2"/);
@@ -195,10 +195,12 @@ test('Nexus owns Kai runner traffic and rollback stays inside Nexus', () => {
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS = "false"/);
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS = "true"/);
   assert.match(wrangler, /KAI_RUNNER_TOOL_LOOP_ENABLED = "true"/);
-  assert.match(nexusIndex, /Nexus is the only Kai runner owner/);
+  assert.match(nexusIndex, /Nexus is the fallback owner only while Continuity proves/);
   assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae/);
   assert.match(nexusIndex, /https:\/\/serythrae\.internal/);
   assert.match(nexusIndex, /return kaiRunnerRunLocal\(request, env\)/);
+  assert.match(nexusIndex, /X-Nexus-Kai-Decision': 'delegated_to_runner'/);
+  assert.match(nexusIndex, /await kaiRunnerPresenceGate\(env\)/);
   assert.match(nexusIndex, /isInternalNexusServiceRequest\(request\) \? null : await authorizeRequiredMcpBearer\(request, env\)/);
   assert.match(nexusIndex, /KAI_RUNNER_TOOL_LOOP_ENABLED, 'true'/);
   assert.match(nexusIndex, /const legacy = await generateKaiText\(env, promptPacket, KAI_PRIMARY_TEXT_MODEL, routingState\)/);
@@ -440,7 +442,7 @@ test('canonical Kai runner mirrors the useful retired NESTeq and Catalouge contr
   assert.match(nexusIndex, /direct_mind_configured: Boolean\(\(env\.SERYTHRAE_MIND \|\| env\.SERYTHRAE_MIND_URL\) && env\.SERYTHRAE_MIND_API_KEY\)/);
   assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_update_progress'/);
   assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_add_annotation'/);
-  assert.match(nexusIndex, /Nexus is the only Kai runner owner/);
+  assert.match(nexusIndex, /Nexus is the fallback owner only while Continuity proves/);
   assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae|serythrae-gw-fallback/);
 });
 

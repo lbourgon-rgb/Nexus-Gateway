@@ -31,6 +31,9 @@ let checkpointAborted = 0;
 export default {
   async fetch(request) {
     const url = new URL(request.url);
+    if (url.pathname === '/runner-presence/kaisoryth') {
+      return Response.json({ companion_id: 'kaisoryth', active: false, lease: null });
+    }
     if (request.method === 'POST') {
       const rpc = await request.json();
       if (rpc.method === 'initialize') {
@@ -94,11 +97,36 @@ export default {
 };
 `;
 
-const openRouterMock = `
-let grokCalls = 0;
+const activePresenceMock = `
 export default {
   async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/runner-presence/kaisoryth') {
+      return Response.json({
+        companion_id: 'kaisoryth',
+        active: true,
+        lease: {
+          companion_id: 'kaisoryth',
+          runner_id: 'kai-harness:mini-pc',
+          lease_epoch: 7,
+          lease_expires_at: '2099-01-01 00:00:00',
+        },
+      });
+    }
+    return Response.json({ error: 'unexpected presence path' }, { status: 404 });
+  },
+};
+`;
+
+const openRouterMock = `
+let grokCalls = 0;
+let totalCalls = 0;
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/stats') return Response.json({ totalCalls, grokCalls });
     const body = await request.json();
+    totalCalls += 1;
     if (body.model === 'z-ai/glm-5.2') {
       return Response.json({ error: { message: 'fixture provider unavailable', metadata: { error_type: 'provider_unavailable' } } }, { status: 503 });
     }
@@ -135,8 +163,9 @@ let duplicatePreflightConfig;
 let mcpCollisionPreflightConfig;
 let routingFallback;
 let deadlineAbort;
+let activeLane;
 
-function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex, routeOpenRouter = false, deadlineOpenRouter = false } = {}) {
+function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex, routeOpenRouter = false, deadlineOpenRouter = false, activePresence = false } = {}) {
   return new Miniflare({
     workers: [
       {
@@ -153,6 +182,7 @@ function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex, 
           ...(preflightDiscord ? { VEL_PREFLIGHT_DISCORD_API_KEY: preflightDiscord } : {}),
           ...(preflightCodex ? { VEL_PREFLIGHT_CODEX_API_KEY: preflightCodex } : {}),
           SERYTHRAE_MIND_API_KEY: 'fixture-mind-key',
+          CONTINUITY_API_KEY: 'fixture-continuity-key',
           KAI_RUNNER_ENABLED: 'true',
           KAI_MODEL_CANARY_KEY,
           ...((routeOpenRouter || deadlineOpenRouter) ? { OPENROUTER_API_KEY: 'fixture-openrouter-key', OPENROUTER_BASE_URL: 'https://openrouter.test/api/v1' } : {}),
@@ -160,6 +190,7 @@ function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex, 
         },
         ...((routeOpenRouter || deadlineOpenRouter) ? { outboundService: 'openrouter-mock' } : {}),
         serviceBindings: {
+          CONTINUITY: activePresence ? 'presence-active-mock' : 'backend-mock',
           ARCHIVE: 'backend-mock',
           CATALOUGE: 'backend-mock',
           SERYTHRAE_MIND: 'backend-mock',
@@ -172,6 +203,7 @@ function runtime(bundlePath, { current, next, preflightDiscord, preflightCodex, 
         modules: true,
         script: backendMock,
       },
+      ...(activePresence ? [{ name: 'presence-active-mock', compatibilityDate: '2025-01-01', modules: true, script: activePresenceMock }] : []),
       ...((routeOpenRouter || deadlineOpenRouter) ? [{ name: 'openrouter-mock', compatibilityDate: '2025-01-01', modules: true, script: deadlineOpenRouter ? deadlineOpenRouterMock : openRouterMock }] : []),
     ],
   });
@@ -263,6 +295,7 @@ before(async () => {
   });
   routingFallback = runtime(bundlePath, { current: CURRENT_API_KEY, routeOpenRouter: true });
   deadlineAbort = runtime(bundlePath, { current: CURRENT_API_KEY, deadlineOpenRouter: true });
+  activeLane = runtime(bundlePath, { current: CURRENT_API_KEY, routeOpenRouter: true, activePresence: true });
   await Promise.all([
     oldOnly.ready,
     nextOnly.ready,
@@ -272,6 +305,7 @@ before(async () => {
     mcpCollisionPreflightConfig.ready,
     routingFallback.ready,
     deadlineAbort.ready,
+    activeLane.ready,
   ]);
 });
 
@@ -285,6 +319,7 @@ after(async () => {
     mcpCollisionPreflightConfig?.dispose(),
     routingFallback?.dispose(),
     deadlineAbort?.dispose(),
+    activeLane?.dispose(),
   ]);
   await rm(root, { recursive: true, force: true });
 });
@@ -448,6 +483,24 @@ test('canonical Nexus Kai runner auth accepts either configured key, fails close
     assert.equal(response.status, 503, `${route} must fail closed when MCP authority is unconfigured`);
     assert.deepEqual(await response.json(), { error: 'MCP_API_KEY is not configured' });
   }
+});
+
+test('live Kai harness presence returns a body-free delegated receipt before any model call', async () => {
+  for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
+    const response = await request(activeLane, route, {
+      method: 'POST',
+      authorization: `Bearer ${CURRENT_API_KEY}`,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'This must never reach a model while the harness lease is live.' }),
+    });
+    assert.equal(response.status, 202, route);
+    assert.equal(response.headers.get('X-Nexus-Kai-Decision'), 'delegated_to_runner');
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(await response.text(), '');
+  }
+  const openRouter = await activeLane.getWorker('openrouter-mock');
+  const stats = await (await openRouter.fetch('https://openrouter.test/stats')).json();
+  assert.equal(stats.totalCalls, 0);
 });
 
 test('Kai fallback simulation requires the distinct canary key', async () => {
