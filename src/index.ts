@@ -3896,6 +3896,18 @@ export default {
       })
     }
 
+    if (url.pathname === '/api/kaisoryth/image') {
+      return new Response(JSON.stringify({
+        ok: false,
+        disabled: true,
+        owner: 'serythrae-gw',
+        error: 'Kai image generation is not owned by Nexus.',
+      }), {
+        status: 410,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS },
+      })
+    }
+
     if (url.pathname === '/api/kaisoryth/brain-status' && request.method === 'GET') {
       const unauthorized = await authorizeRequiredMcpBearer(request, env)
       if (unauthorized) return unauthorized

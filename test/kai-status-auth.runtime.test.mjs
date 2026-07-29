@@ -505,6 +505,22 @@ test('canonical Nexus Kai ingress auth accepts configured keys and fails closed 
   }
 });
 
+test('retired Nexus image route is an explicit Kai-home ownership tombstone', async () => {
+  const response = await request(both, '/api/kaisoryth/image', {
+    method: 'POST',
+    authorization: `Bearer ${CURRENT_API_KEY}`,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: 'must not generate in Nexus' }),
+  });
+  assert.equal(response.status, 410);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    disabled: true,
+    owner: 'serythrae-gw',
+    error: 'Kai image generation is not owned by Nexus.',
+  });
+});
+
 test('live Kai harness presence returns a body-free delegated receipt before any model call', async () => {
   for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
     const response = await request(activeLane, route, {

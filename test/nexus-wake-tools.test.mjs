@@ -292,7 +292,7 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
   );
 });
 
-test('Nexus has no public Kai image route; its dormant local runner code is not an ingress owner', () => {
+test('Nexus Kai image route is an explicit tombstone; dormant local code is not an ingress owner', () => {
   assert.match(nexusIndex, /function looksLikeKaiImageGenerationRequest\(content: string\): boolean/);
   assert.match(nexusIndex, /\\bmake\\s\+\(\?:me\|for me\|us\|for us\)\\b\[\\s\\S\]\{0,120\}\\b\(portrait\|selfie\|scene\|wallpaper\|avatar\|icon\|sticker\|banner\|card\|poster\|logo\|character\|sketch\|painting\|bouquet\|flowers\?/);
   assert.match(nexusIndex, /function imageReferenceUrls\(body: Record<string, unknown>, envelope: KaiDiscordEnvelope\): string\[\]/);
@@ -315,7 +315,9 @@ test('Nexus has no public Kai image route; its dormant local runner code is not 
   assert.match(nexusIndex, /validateKaiGeneratedImage\(stringValue\(item\.b64_json\)/);
   assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, item\.data_url, prompt, model\)/);
   assert.doesNotMatch(nexusIndex, /async function kaiImageGenerate\(request: Request, env: Env\)/);
-  assert.doesNotMatch(nexusIndex, /url\.pathname === '\/api\/kaisoryth\/image'/);
+  assert.match(nexusIndex, /url\.pathname === '\/api\/kaisoryth\/image'/);
+  assert.match(nexusIndex, /Kai image generation is not owned by Nexus/);
+  assert.match(nexusIndex, /status: 410/);
   assert.doesNotMatch(nexusIndex, /modalities: \['image', 'text'\]/);
 });
 
