@@ -430,7 +430,7 @@ test('MCP and SSE transports fail closed for missing, wrong, and unconfigured cr
   }
 });
 
-test('canonical Nexus Kai runner auth accepts either configured key, fails closed without keys, and preserves internal bypass', async () => {
+test('canonical Nexus Kai runner and image auth accept configured keys and fail closed without them', async () => {
   const init = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -443,13 +443,30 @@ test('canonical Nexus Kai runner auth accepts either configured key, fails close
   })).status, 401, 'next-only runner rejects inactive current key');
 
   for (const [name, worker] of [['old-only', oldOnly], ['next-only', nextOnly], ['both', both]]) {
-    for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
+    for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview', '/api/kaisoryth/image']) {
       assert.equal((await request(worker, route, init)).status, 401, `${name} ${route} rejects missing bearer`);
       assert.equal((await request(worker, route, {
         ...init,
         authorization: `Bearer ${WRONG_API_KEY}`,
       })).status, 401, `${name} ${route} rejects wrong bearer`);
     }
+  }
+
+  for (const [name, worker, authorization] of [
+    ['old-only image', oldOnly, `Bearer ${CURRENT_API_KEY}`],
+    ['next-only image', nextOnly, `Bearer ${NEXT_API_KEY}`],
+    ['both image current', both, `Bearer ${CURRENT_API_KEY}`],
+    ['both image next', both, `Bearer ${NEXT_API_KEY}`],
+  ]) {
+    const response = await request(worker, '/api/kaisoryth/image', {
+      ...init,
+      authorization,
+      body: JSON.stringify({ prompt: 'bounded image auth fixture' }),
+    });
+    assert.notEqual(response.status, 401, `${name} should pass image auth`);
+    assert.notEqual(response.status, 503, `${name} should not require missing auth configuration`);
+    assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
+    assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
   }
 
   for (const [name, worker, authorization, baseUrl] of [
@@ -478,7 +495,7 @@ test('canonical Nexus Kai runner auth accepts either configured key, fails close
     assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
   }
 
-  for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
+  for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview', '/api/kaisoryth/image']) {
     const response = await request(missingConfig, route, init);
     assert.equal(response.status, 503, `${route} must fail closed when MCP authority is unconfigured`);
     assert.deepEqual(await response.json(), { error: 'MCP_API_KEY is not configured' });

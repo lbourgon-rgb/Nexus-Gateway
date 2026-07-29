@@ -314,6 +314,9 @@ test('Kai image generation uses transient validated references and the dedicated
   assert.match(nexusIndex, /input_references: referenceUrls\.map\(url => \(\{ type: 'image_url', image_url: \{ url \} \}\)\)/);
   assert.match(nexusIndex, /validateKaiGeneratedImage\(stringValue\(item\.b64_json\)/);
   assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, item\.data_url, prompt, model\)/);
+  assert.match(nexusIndex, /async function kaiImageGenerate\(request: Request, env: Env\)/);
+  assert.match(nexusIndex, /url\.pathname === '\/api\/kaisoryth\/image'/);
+  assert.match(nexusIndex, /runKaiImageGeneration\(env, envelope, \{/);
   assert.doesNotMatch(nexusIndex, /modalities: \['image', 'text'\]/);
 });
 

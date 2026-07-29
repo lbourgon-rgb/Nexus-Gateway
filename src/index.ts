@@ -3229,6 +3229,45 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   })
 }
 
+async function kaiImageGenerate(request: Request, env: Env): Promise<Response> {
+  const unauthorized = await authorizeRequiredMcpBearer(request, env)
+  if (unauthorized) return unauthorized
+
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>
+  const prompt = stringValue(body.prompt)
+    || stringValue(body.image_prompt)
+    || stringValue(body.generate_image_prompt)
+  if (!prompt) {
+    return new Response(JSON.stringify({
+      ok: false,
+      error: 'prompt is required',
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS },
+    })
+  }
+
+  const envelope = normalizeKaiRunnerEnvelope({
+    ...body,
+    message: prompt,
+    trigger: 'manual',
+  })
+  const imageGeneration = await runKaiImageGeneration(env, envelope, {
+    ...body,
+    generate_image: true,
+    generate_image_prompt: prompt,
+  }, Date.now() + 60_000, request.signal)
+
+  return new Response(JSON.stringify({
+    ok: imageGeneration.ok,
+    companion_id: 'kaisoryth',
+    source: 'nexus-gateway',
+    image_generation: imageGeneration,
+  }), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS },
+  })
+}
+
 async function kaiRunnerPresenceGate(env: Env): Promise<Response | null> {
   try {
     const presence = recordValue(await callContinuityJson(env, '/runner-presence/kaisoryth'))
@@ -3858,6 +3897,10 @@ export default {
 
     if (url.pathname === '/api/kaisoryth/context' && (request.method === 'POST' || request.method === 'GET')) {
       return kaiContext(request, env)
+    }
+
+    if (url.pathname === '/api/kaisoryth/image' && request.method === 'POST') {
+      return kaiImageGenerate(request, env)
     }
 
     if (url.pathname === '/api/kaisoryth/brain-status' && request.method === 'GET') {
