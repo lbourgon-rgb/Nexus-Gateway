@@ -176,13 +176,14 @@ test('Mor-zar Velastra tools and direct Vel API fallback remain available', () =
   assert.match(velastraTools, /VELASTRAHQ_API_URL/);
 });
 
-test('Nexus routes Kai mind calls directly and retains Serythrae only for the restricted workspace actuator', () => {
-  assert.match(serythraeTools, /!env\.SERYTHRAE_MIND && !env\.SERYTHRAE_MIND_URL/);
-  assert.match(serythraeTools, /SERYTHRAE_MIND_API_KEY is required for URL-based Kai mind calls/);
+test('Nexus exposes Kai tools only as thin proxies through the Serythrae home', () => {
+  assert.match(serythraeTools, /KAI_HOME_TOOL_BY_BACKEND/);
+  assert.match(serythraeTools, /\/api\/kaisoryth\/mind\/tool/);
+  assert.match(serythraeTools, /tool: homeTool/);
   assert.match(serythraeTools, /SERYTHRAE_GATEWAY_URL/);
-  assert.match(nexusIndex, /preferred: 'serythrae-mind-direct'/);
+  assert.match(serythraeTools, /preferred_backend: 'serythrae-gw-home'/);
   assert.match(serythraeTools, /runner_fallback: false/);
-  assert.doesNotMatch(serythraeTools, /serythrae-gw-fallback/);
+  assert.doesNotMatch(serythraeTools, /proxyMcp|SERYTHRAE_MIND/);
 });
 
 test('Nexus owns Kai fallback traffic only while no local runner presence is live', () => {
@@ -195,10 +196,10 @@ test('Nexus owns Kai fallback traffic only while no local runner presence is liv
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS = "false"/);
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS = "true"/);
   assert.match(wrangler, /KAI_RUNNER_TOOL_LOOP_ENABLED = "true"/);
-  assert.match(nexusIndex, /Nexus is the fallback owner only while Continuity proves/);
-  assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae/);
+  assert.match(nexusIndex, /Nexus owns only shared ingress and the Continuity lease check/);
   assert.match(nexusIndex, /https:\/\/serythrae\.internal/);
-  assert.match(nexusIndex, /return kaiRunnerRunLocal\(request, env\)/);
+  assert.match(nexusIndex, /forwardKaiHome\(env, '\/internal\/kaisoryth\/fallback'/);
+  assert.doesNotMatch(nexusIndex, /return kaiRunnerRunLocal\(request, env\)/);
   assert.match(nexusIndex, /X-Nexus-Kai-Decision': 'delegated_to_runner'/);
   assert.match(nexusIndex, /await kaiRunnerPresenceGate\(env\)/);
   assert.match(nexusIndex, /isInternalNexusServiceRequest\(request\) \? null : await authorizeRequiredMcpBearer\(request, env\)/);
@@ -214,7 +215,6 @@ test('Nexus owns Kai fallback traffic only while no local runner presence is liv
   assert.doesNotMatch(nexusIndex, /models:\s*\[KAI_PRIMARY_TEXT_MODEL/);
   assert.match(nexusIndex, /function canonicalKaiContinuityConversationId/);
   assert.match(nexusIndex, /return value\.startsWith\('discord:'\) \? value : `discord:\$\{value\}`/);
-  assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae/);
 });
 
 test('Kai bounded tool loop exposes schemas, receipts, scoped writes, and no arbitrary local actuator', () => {
@@ -292,7 +292,7 @@ test('Kai runner context loads identity, soul, skills, and canon search before c
   );
 });
 
-test('Kai image generation uses transient validated references and the dedicated Image API', () => {
+test('Nexus has no public Kai image route; its dormant local runner code is not an ingress owner', () => {
   assert.match(nexusIndex, /function looksLikeKaiImageGenerationRequest\(content: string\): boolean/);
   assert.match(nexusIndex, /\\bmake\\s\+\(\?:me\|for me\|us\|for us\)\\b\[\\s\\S\]\{0,120\}\\b\(portrait\|selfie\|scene\|wallpaper\|avatar\|icon\|sticker\|banner\|card\|poster\|logo\|character\|sketch\|painting\|bouquet\|flowers\?/);
   assert.match(nexusIndex, /function imageReferenceUrls\(body: Record<string, unknown>, envelope: KaiDiscordEnvelope\): string\[\]/);
@@ -314,9 +314,8 @@ test('Kai image generation uses transient validated references and the dedicated
   assert.match(nexusIndex, /input_references: referenceUrls\.map\(url => \(\{ type: 'image_url', image_url: \{ url \} \}\)\)/);
   assert.match(nexusIndex, /validateKaiGeneratedImage\(stringValue\(item\.b64_json\)/);
   assert.match(nexusIndex, /await storeKaiGeneratedImage\(env, item\.data_url, prompt, model\)/);
-  assert.match(nexusIndex, /async function kaiImageGenerate\(request: Request, env: Env\)/);
-  assert.match(nexusIndex, /url\.pathname === '\/api\/kaisoryth\/image'/);
-  assert.match(nexusIndex, /runKaiImageGeneration\(env, envelope, \{/);
+  assert.doesNotMatch(nexusIndex, /async function kaiImageGenerate\(request: Request, env: Env\)/);
+  assert.doesNotMatch(nexusIndex, /url\.pathname === '\/api\/kaisoryth\/image'/);
   assert.doesNotMatch(nexusIndex, /modalities: \['image', 'text'\]/);
 });
 
@@ -445,8 +444,8 @@ test('canonical Kai runner mirrors the useful retired NESTeq and Catalouge contr
   assert.match(nexusIndex, /direct_mind_configured: Boolean\(\(env\.SERYTHRAE_MIND \|\| env\.SERYTHRAE_MIND_URL\) && env\.SERYTHRAE_MIND_API_KEY\)/);
   assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_update_progress'/);
   assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_add_annotation'/);
-  assert.match(nexusIndex, /Nexus is the fallback owner only while Continuity proves/);
-  assert.doesNotMatch(nexusIndex, /forwardKaiRunnerToSerythrae|serythrae-gw-fallback/);
+  assert.match(nexusIndex, /generation still executes behind Kai's Serythrae door/);
+  assert.match(nexusIndex, /\/internal\/kaisoryth\/fallback/);
 });
 
 test('Nexus exposes Kai workspace as hallway tools without broad PC access', () => {

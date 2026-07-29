@@ -3229,45 +3229,6 @@ async function kaiContext(request: Request, env: Env): Promise<Response> {
   })
 }
 
-async function kaiImageGenerate(request: Request, env: Env): Promise<Response> {
-  const unauthorized = await authorizeRequiredMcpBearer(request, env)
-  if (unauthorized) return unauthorized
-
-  const body = await request.json().catch(() => ({})) as Record<string, unknown>
-  const prompt = stringValue(body.prompt)
-    || stringValue(body.image_prompt)
-    || stringValue(body.generate_image_prompt)
-  if (!prompt) {
-    return new Response(JSON.stringify({
-      ok: false,
-      error: 'prompt is required',
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS },
-    })
-  }
-
-  const envelope = normalizeKaiRunnerEnvelope({
-    ...body,
-    message: prompt,
-    trigger: 'manual',
-  })
-  const imageGeneration = await runKaiImageGeneration(env, envelope, {
-    ...body,
-    generate_image: true,
-    generate_image_prompt: prompt,
-  }, Date.now() + 60_000, request.signal)
-
-  return new Response(JSON.stringify({
-    ok: imageGeneration.ok,
-    companion_id: 'kaisoryth',
-    source: 'nexus-gateway',
-    image_generation: imageGeneration,
-  }), {
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS },
-  })
-}
-
 async function kaiRunnerPresenceGate(env: Env): Promise<Response | null> {
   try {
     const presence = recordValue(await callContinuityJson(env, '/runner-presence/kaisoryth'))
@@ -3304,14 +3265,45 @@ async function kaiRunnerPresenceGate(env: Env): Promise<Response | null> {
   }
 }
 
+async function forwardKaiHome(
+  env: Env,
+  path: string,
+  body: string,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  if (!env.SERYTHRAE_GATEWAY && !env.SERYTHRAE_GATEWAY_URL) {
+    return new Response(JSON.stringify({
+      ok: false,
+      error: 'Kai Serythrae home is not configured.',
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS },
+    })
+  }
+  const target = `${(env.SERYTHRAE_GATEWAY_URL || 'https://serythrae.internal').replace(/\/+$/, '')}${path}`
+  const homeRequest = new Request(target, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body,
+  })
+  return env.SERYTHRAE_GATEWAY
+    ? env.SERYTHRAE_GATEWAY.fetch(homeRequest)
+    : fetch(homeRequest)
+}
+
 async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
-  // Nexus is the fallback owner only while Continuity proves that no local
-  // companion-scoped runner presence lease is live.
+  // Nexus owns only shared ingress and the Continuity lease check. If no local
+  // runner is present, generation still executes behind Kai's Serythrae door.
   const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeRequiredMcpBearer(request, env)
   if (unauthorized) return unauthorized
   const presenceGate = await kaiRunnerPresenceGate(env)
   if (presenceGate) return presenceGate
-  return kaiRunnerRunLocal(request, env)
+  const body = await request.text()
+  return forwardKaiHome(env, '/internal/kaisoryth/fallback', body, {
+    ...(request.headers.get('X-Nexus-Kai-Canary')
+      ? { 'X-Nexus-Kai-Canary': request.headers.get('X-Nexus-Kai-Canary') as string }
+      : {}),
+  })
 }
 
 async function kaiRunnerRunLocal(request: Request, env: Env): Promise<Response> {
@@ -3809,13 +3801,11 @@ export default {
         readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct authenticated Kai mind backend configured'),
         {
           id: 'kai_runner',
-          label: 'Kai / Canonical Nexus Runner',
-          status: envFlag(env.KAI_RUNNER_ENABLED) ? 'ok' : 'not_configured',
-          note: envFlag(env.KAI_RUNNER_ENABLED)
-            ? (envText(env.KAI_RUNNER_TOOL_LOOP_ENABLED, 'true').toLowerCase() === 'false'
-                ? 'Nexus prefetch-only rollback mode enabled'
-                : 'Nexus bounded GLM 5.2 tool loop enabled')
-            : 'runner disabled by safety gate',
+          label: 'Kai / Serythrae Home Fallback',
+          status: env.SERYTHRAE_GATEWAY || env.SERYTHRAE_GATEWAY_URL ? 'ok' : 'not_configured',
+          note: env.SERYTHRAE_GATEWAY || env.SERYTHRAE_GATEWAY_URL
+            ? 'Nexus performs only the lease gate, then forwards to Kai Serythrae home'
+            : 'Kai Serythrae home fallback is not configured',
           last_checked: new Date().toISOString(),
         },
         {
@@ -3896,11 +3886,14 @@ export default {
     }
 
     if (url.pathname === '/api/kaisoryth/context' && (request.method === 'POST' || request.method === 'GET')) {
-      return kaiContext(request, env)
-    }
-
-    if (url.pathname === '/api/kaisoryth/image' && request.method === 'POST') {
-      return kaiImageGenerate(request, env)
+      const unauthorized = await authorizeRequiredMcpBearer(request, env)
+      if (unauthorized) return unauthorized
+      const body = request.method === 'POST' ? await request.text() : '{}'
+      return forwardKaiHome(env, '/api/kaisoryth/context', body, {
+        ...(env.SERYTHRAE_GATEWAY_API_KEY
+          ? { Authorization: `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}` }
+          : {}),
+      })
     }
 
     if (url.pathname === '/api/kaisoryth/brain-status' && request.method === 'GET') {

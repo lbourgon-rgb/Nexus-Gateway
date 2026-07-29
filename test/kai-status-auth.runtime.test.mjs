@@ -28,11 +28,31 @@ const backendMock = `
 let checkpointStarted = 0;
 let checkpointCompleted = 0;
 let checkpointAborted = 0;
+let homeFallbackCalls = 0;
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/runner-presence/kaisoryth') {
       return Response.json({ companion_id: 'kaisoryth', active: false, lease: null });
+    }
+    if (url.pathname === '/internal/kaisoryth/fallback') {
+      homeFallbackCalls += 1;
+      const body = await request.json();
+      return Response.json({
+        ok: true,
+        companion_id: 'kaisoryth',
+        source: 'serythrae-gw',
+        response: 'Fixture reply generated inside Kai home.',
+        received: body,
+        canary_header: request.headers.get('X-Nexus-Kai-Canary'),
+      });
+    }
+    if (url.pathname === '/api/kaisoryth/context') {
+      return Response.json({
+        ok: true,
+        companion_id: 'kaisoryth',
+        source: 'serythrae-gw',
+      });
     }
     if (request.method === 'POST') {
       const rpc = await request.json();
@@ -83,7 +103,7 @@ export default {
     if (url.pathname.startsWith('/api/archive/stats')) {
       return Response.json({ total_messages: 5 });
     }
-    if (url.pathname === '/stats') return Response.json({ checkpointStarted, checkpointCompleted, checkpointAborted });
+    if (url.pathname === '/stats') return Response.json({ checkpointStarted, checkpointCompleted, checkpointAborted, homeFallbackCalls });
     return Response.json({
       ok: true,
       threads: [],
@@ -430,7 +450,7 @@ test('MCP and SSE transports fail closed for missing, wrong, and unconfigured cr
   }
 });
 
-test('canonical Nexus Kai runner and image auth accept configured keys and fail closed without them', async () => {
+test('canonical Nexus Kai ingress auth accepts configured keys and fails closed without them', async () => {
   const init = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -443,30 +463,13 @@ test('canonical Nexus Kai runner and image auth accept configured keys and fail 
   })).status, 401, 'next-only runner rejects inactive current key');
 
   for (const [name, worker] of [['old-only', oldOnly], ['next-only', nextOnly], ['both', both]]) {
-    for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview', '/api/kaisoryth/image']) {
+    for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
       assert.equal((await request(worker, route, init)).status, 401, `${name} ${route} rejects missing bearer`);
       assert.equal((await request(worker, route, {
         ...init,
         authorization: `Bearer ${WRONG_API_KEY}`,
       })).status, 401, `${name} ${route} rejects wrong bearer`);
     }
-  }
-
-  for (const [name, worker, authorization] of [
-    ['old-only image', oldOnly, `Bearer ${CURRENT_API_KEY}`],
-    ['next-only image', nextOnly, `Bearer ${NEXT_API_KEY}`],
-    ['both image current', both, `Bearer ${CURRENT_API_KEY}`],
-    ['both image next', both, `Bearer ${NEXT_API_KEY}`],
-  ]) {
-    const response = await request(worker, '/api/kaisoryth/image', {
-      ...init,
-      authorization,
-      body: JSON.stringify({ prompt: 'bounded image auth fixture' }),
-    });
-    assert.notEqual(response.status, 401, `${name} should pass image auth`);
-    assert.notEqual(response.status, 503, `${name} should not require missing auth configuration`);
-    assertHeadersDoNotLeak(response, [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
-    assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
   }
 
   for (const [name, worker, authorization, baseUrl] of [
@@ -495,7 +498,7 @@ test('canonical Nexus Kai runner and image auth accept configured keys and fail 
     assertTextDoesNotLeak(await response.text(), [CURRENT_API_KEY, NEXT_API_KEY, WRONG_API_KEY], name);
   }
 
-  for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview', '/api/kaisoryth/image']) {
+  for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
     const response = await request(missingConfig, route, init);
     assert.equal(response.status, 503, `${route} must fail closed when MCP authority is unconfigured`);
     assert.deepEqual(await response.json(), { error: 'MCP_API_KEY is not configured' });
@@ -520,36 +523,25 @@ test('live Kai harness presence returns a body-free delegated receipt before any
   assert.equal(stats.totalCalls, 0);
 });
 
-test('Kai fallback simulation requires the distinct canary key', async () => {
+test('Nexus forwards fallback bodies and canary headers to Kai home without generating locally', async () => {
   const body = JSON.stringify({
     content: 'bounded fallback canary',
     model_canary: { simulate_primary_failure: true, reason_code: 'explicit-live-canary' },
   });
-  for (const provided of [undefined, 'wrong-canary-key']) {
-    const response = await request(both, '/api/kaisoryth/run', {
-      method: 'POST',
-      authorization: `Bearer ${CURRENT_API_KEY}`,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(provided ? { 'X-Nexus-Kai-Canary': provided } : {}),
-      },
-      body,
-    });
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { ok: false, error: 'Kai model canary authorization failed' });
-  }
-
   const authorized = await request(both, '/api/kaisoryth/run', {
     method: 'POST',
     authorization: `Bearer ${CURRENT_API_KEY}`,
     headers: { 'Content-Type': 'application/json', 'X-Nexus-Kai-Canary': KAI_MODEL_CANARY_KEY },
     body,
   });
-  assert.notEqual(authorized.status, 403);
-  assertTextDoesNotLeak(await authorized.text(), [KAI_MODEL_CANARY_KEY], 'authorized model canary');
+  assert.equal(authorized.status, 200);
+  const result = await authorized.json();
+  assert.equal(result.source, 'serythrae-gw');
+  assert.equal(result.received.content, 'bounded fallback canary');
+  assert.equal(result.canary_header, KAI_MODEL_CANARY_KEY);
 });
 
-test('real primary HTTP failure selects exact Grok backup and stays latched after a tool round', async () => {
+test('Nexus fallback does not call its own OpenRouter lane', async () => {
   const response = await request(routingFallback, '/api/kaisoryth/run', {
     method: 'POST',
     authorization: `Bearer ${CURRENT_API_KEY}`,
@@ -558,16 +550,14 @@ test('real primary HTTP failure selects exact Grok backup and stays latched afte
   });
   assert.equal(response.status, 200);
   const result = await response.json();
-  assert.equal(result.generation.fallback_used, true);
-  assert.equal(result.generation.model, 'x-ai/grok-4.5');
-  assert.equal(result.generation.primary_failure.category, 'provider_unavailable');
-  assert.equal(result.response, 'Grounded backup reply after Kai mind read.');
-  assert.equal(result.tool_loop.receipts.filter((receipt) => receipt.tool === 'kaisoryth_orient' && receipt.status === 'executed').length, 1);
-  const diagnosticModels = result.tool_loop.model_diagnostics.map((item) => item.endpoint_model).filter(Boolean);
-  assert.deepEqual(diagnosticModels, ['z-ai/glm-5.2', 'x-ai/grok-4.5', 'x-ai/grok-4.5']);
+  assert.equal(result.source, 'serythrae-gw');
+  assert.equal(result.response, 'Fixture reply generated inside Kai home.');
+  const openRouter = await routingFallback.getWorker('openrouter-mock');
+  const stats = await (await openRouter.fetch('https://openrouter.test/stats')).json();
+  assert.equal(stats.totalCalls, 0);
 });
 
-test('runner deadline refuses a model-authorized Catalouge write that cannot finish inside the request budget', async () => {
+test('Nexus does not start local deadline or Catalouge work for fallback requests', async () => {
   const response = await request(deadlineAbort, '/api/kaisoryth/run', {
     method: 'POST',
     authorization: `Bearer ${CURRENT_API_KEY}`,
@@ -581,10 +571,10 @@ test('runner deadline refuses a model-authorized Catalouge write that cannot fin
       },
     }),
   });
-  assert.equal(response.status, 504);
-  await new Promise((resolve) => setTimeout(resolve, 1700));
+  assert.equal(response.status, 200);
   const backend = await deadlineAbort.getWorker('backend-mock');
   const stats = await (await backend.fetch('https://backend.test/stats')).json();
+  assert.ok(stats.homeFallbackCalls >= 1);
   assert.equal(stats.checkpointStarted, 0);
   assert.equal(stats.checkpointCompleted, 0);
   assert.equal(stats.checkpointAborted, 0);

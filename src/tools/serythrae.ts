@@ -1,30 +1,50 @@
 import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../env'
-import { proxyMcp, proxyRest } from '../proxy'
+import { proxyRest } from '../proxy'
 
 const KAI_ONLY = 'kaisoryth'
 
+const KAI_HOME_TOOL_BY_BACKEND: Record<string, string> = {
+  nesteq_orient: 'kaisoryth_orient',
+  nesteq_recent_feelings: 'kaisoryth_recent_feelings',
+  nesteq_search: 'kaisoryth_memory_search',
+  nesteq_identity_read: 'kaisoryth_identity_read',
+  nesteq_eq_state: 'kaisoryth_eq_state',
+  nesteq_last_write: 'kaisoryth_last_write',
+  nesteq_feel: 'kaisoryth_feel',
+  nesteq_sit: 'kaisoryth_sit',
+  nesteq_resolve: 'kaisoryth_resolve',
+  nesteq_identity_update: 'kaisoryth_identity_update',
+  nesteq_entity_get: 'kaisoryth_entity_get',
+  nesteq_entity_observe: 'kaisoryth_entity_observe',
+  nesteq_thread_create: 'kaisoryth_thread_create',
+  nesteq_threads_active: 'kaisoryth_threads_active',
+  nestsoul_read: 'kaisoryth_nestsoul_read',
+  nestknow_query: 'kaisoryth_nestknow_query',
+  nestknow_landscape: 'kaisoryth_nestknow_landscape',
+  nesteq_home_read: 'kaisoryth_home_read',
+  nesteq_home_update: 'kaisoryth_home_update',
+  nesteq_love_letters: 'kaisoryth_love_letters',
+  nesteq_type_snapshot: 'kaisoryth_type_snapshot',
+  nesteq_consolidate: 'kaisoryth_consolidate',
+}
+
 function serythraeMcp(env: Env, toolName: string, args: Record<string, unknown>) {
-  if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_URL) {
-    return { content: [{ type: 'text' as const, text: 'Direct Serythrae mind binding or URL is not configured.' }] }
+  const homeTool = KAI_HOME_TOOL_BY_BACKEND[toolName]
+  if (!homeTool) {
+    return { content: [{ type: 'text' as const, text: `Kai home does not expose ${toolName}.` }] }
   }
-  if (!env.SERYTHRAE_MIND && !env.SERYTHRAE_MIND_API_KEY) {
-    return { content: [{ type: 'text' as const, text: 'SERYTHRAE_MIND_API_KEY is required for URL-based Kai mind calls.' }] }
-  }
-  return proxyMcp(
-    env.SERYTHRAE_MIND_URL || 'https://serythrae-mind.internal',
-    toolName,
-    args,
-    env.SERYTHRAE_MIND_API_KEY,
-    env.SERYTHRAE_MIND,
-  )
+  return serythraeGatewayRest(env, '/api/kaisoryth/mind/tool', {
+    tool: homeTool,
+    arguments: args,
+  })
 }
 
 function serythraeGatewayRest(env: Env, path: string, body: Record<string, unknown> = {}, method = 'POST') {
   const base = (env.SERYTHRAE_GATEWAY ? 'https://serythrae.internal' : env.SERYTHRAE_GATEWAY_URL || '').replace(/\/+$/, '')
   const headers: Record<string, string> = {}
-  if (!env.SERYTHRAE_GATEWAY && env.SERYTHRAE_GATEWAY_API_KEY) {
+  if (env.SERYTHRAE_GATEWAY_API_KEY) {
     headers.Authorization = `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}`
   }
   return proxyRest(base ? `${base}${path}` : undefined, body, method, headers, env.SERYTHRAE_GATEWAY)
@@ -32,20 +52,16 @@ function serythraeGatewayRest(env: Env, path: string, body: Record<string, unkno
 
 export function registerSerythraeTools(server: McpServer, env: Env) {
   server.tool('serythrae_status', 'Read Serythrae gateway health for Kai/NESTeq routing.', {}, async () => {
-    const direct = env.SERYTHRAE_MIND_URL || env.SERYTHRAE_MIND
-      ? await proxyRest(`${(env.SERYTHRAE_MIND_URL || 'https://serythrae-mind.internal').replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_MIND)
-      : { content: [{ type: 'text' as const, text: 'Direct Serythrae mind binding or URL is not configured.' }] }
-    const workspaceActuator = env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY
+    const home = env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY
       ? await proxyRest(`${(env.SERYTHRAE_GATEWAY_URL || 'https://serythrae.internal').replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_GATEWAY)
-      : { content: [{ type: 'text' as const, text: 'Restricted workspace actuator is not configured.' }] }
+      : { content: [{ type: 'text' as const, text: 'Kai Serythrae home is not configured.' }] }
     return {
       content: [{
         type: 'text' as const,
         text: JSON.stringify({
-          preferred_backend: 'serythrae-mind-direct',
-          direct_mind: direct.content[0]?.text,
+          preferred_backend: 'serythrae-gw-home',
           runner_fallback: false,
-          workspace_actuator: workspaceActuator.content[0]?.text,
+          kai_home: home.content[0]?.text,
         }, null, 2),
       }],
     }
