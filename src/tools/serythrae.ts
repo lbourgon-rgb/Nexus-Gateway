@@ -291,7 +291,7 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
   server.tool(
     'kaisoryth_platform_sessions_list',
     'Internal Serythrae residence operation: list durable Kai sessions.',
-    { include_archived: z.boolean().optional(), limit: z.number().optional() },
+    { include_archived: z.boolean().optional(), include_deleted: z.boolean().optional(), limit: z.number().optional() },
     async (args) => callSerythraePlatform(env, 'kai_platform_sessions_list', args),
   )
 
@@ -307,6 +307,60 @@ export function registerSerythraeTools(server: McpServer, env: Env) {
     'Internal Serythrae residence operation: read the approved Kai bootstrap and pending NESTSoul proposals.',
     {},
     async () => callSerythraePlatform(env, 'kai_platform_bootstrap_active'),
+  )
+
+  server.tool(
+    'kaisoryth_platform_device_put',
+    'Internal Serythrae residence operation: create or rotate one hashed paired-device credential.',
+    {
+      device_id: z.string(), credential_hash: z.string(), display_name: z.string(),
+      scopes: z.array(z.string()), created_at: z.string().optional(), last_seen_at: z.string().nullable().optional(),
+    },
+    async (args) => callSerythraePlatform(env, 'kai_platform_device_put', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_device_resolve',
+    'Internal Serythrae residence operation: resolve one hashed paired-device credential without exposing its secret.',
+    { device_id: z.string(), credential_hash: z.string(), seen_at: z.string().optional() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_device_resolve', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_devices_list',
+    'Internal Serythrae residence operation: list safe paired-device metadata.',
+    { include_revoked: z.boolean().optional(), limit: z.number().optional() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_devices_list', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_device_revoke',
+    'Internal Serythrae residence operation: revoke one paired device.',
+    { device_id: z.string(), revoked_at: z.string().optional() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_device_revoke', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_device_nonce_claim',
+    'Internal Serythrae residence operation: atomically claim one hashed device request nonce.',
+    {
+      device_id: z.string(), nonce_hash: z.string(), request_timestamp: z.string(),
+      claimed_at: z.string().optional(), expires_at: z.string(),
+    },
+    async (args) => callSerythraePlatform(env, 'kai_platform_device_nonce_claim', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_attachment_put',
+    'Internal Serythrae residence operation: persist private attachment metadata and its vision status, never raw bytes.',
+    {
+      attachment_id: z.string(), session_id: z.string(), turn_id: z.string().nullable().optional(),
+      filename: z.string(), media_type: z.string(), byte_length: z.number(), content_sha256: z.string(),
+      status: z.enum(['staged', 'processing', 'processed', 'failed', 'purged']),
+      vision_model: z.string().nullable().optional(), vision_text: z.string().nullable().optional(),
+      error_text: z.string().nullable().optional(), created_at: z.string().optional(), processed_at: z.string().nullable().optional(),
+    },
+    async (args) => callSerythraePlatform(env, 'kai_platform_attachment_put', args),
   )
 
   server.tool(
