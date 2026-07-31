@@ -52,6 +52,17 @@ function serythraeGatewayRest(env: Env, path: string, body: Record<string, unkno
   return proxyRest(base ? `${base}${path}` : undefined, body, method, headers, env.SERYTHRAE_GATEWAY)
 }
 
+export function callSerythraePlatform(
+  env: Env,
+  tool: string,
+  args: Record<string, unknown> = {},
+) {
+  return serythraeGatewayRest(env, '/api/kaisoryth/platform/tool', {
+    tool,
+    arguments: args,
+  })
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -199,6 +210,105 @@ export async function callSerythraeDoorway(
 }
 
 export function registerSerythraeTools(server: McpServer, env: Env) {
+  server.tool(
+    'kaisoryth_platform_session_put',
+    'Internal Serythrae residence operation: idempotently create or update one Kai platform session.',
+    {
+      session_id: z.string(), selected_model: z.string(), title: z.string().nullable().optional(),
+      bootstrap_version_id: z.string().nullable().optional(), bootstrap_text: z.string().optional(),
+      wake_receipt: z.record(z.string(), z.unknown()).optional(),
+      state: z.enum(['active', 'archived', 'deleted']).optional(), designated_event_sink: z.boolean().optional(),
+      last_event_sequence: z.number().optional(), created_at: z.string().optional(), updated_at: z.string().optional(),
+      archived_at: z.string().nullable().optional(), deleted_at: z.string().nullable().optional(),
+    },
+    async (args) => callSerythraePlatform(env, 'kai_platform_session_put', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_event_put',
+    'Internal Serythrae residence operation: idempotently persist one ordered Kai platform event.',
+    {
+      event_id: z.string(), session_id: z.string(), sequence: z.number(),
+      turn_id: z.string().nullable().optional(), idempotency_key: z.string().nullable().optional(),
+      event_type: z.string(), role: z.enum(['system', 'user', 'assistant', 'tool']).nullable().optional(),
+      content: z.string().nullable().optional(), payload: z.record(z.string(), z.unknown()).optional(),
+      content_sha256: z.string(), continuity_event_id: z.string().nullable().optional(),
+      created_at: z.string().optional(), persisted_at: z.string().optional(), finalized_at: z.string().nullable().optional(),
+    },
+    async (args) => callSerythraePlatform(env, 'kai_platform_event_put', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_event_link',
+    'Internal Serythrae residence operation: link a durable platform event to its Continuity envelope.',
+    { event_id: z.string(), continuity_event_id: z.string() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_event_link', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_turn_put',
+    'Internal Serythrae residence operation: idempotently advance one Kai turn lifecycle.',
+    {
+      turn_id: z.string(), session_id: z.string(), idempotency_key: z.string(),
+      user_event_id: z.string().nullable().optional(), assistant_event_id: z.string().nullable().optional(),
+      lifecycle_status: z.enum(['queued', 'provider_started', 'completed', 'interrupted', 'failed']),
+      provider: z.string().nullable().optional(), model: z.string().nullable().optional(),
+      usage: z.record(z.string(), z.unknown()).optional(), cost: z.record(z.string(), z.unknown()).optional(),
+      error: z.unknown().optional(), retry_receipt: z.unknown().optional(),
+      created_at: z.string().optional(), updated_at: z.string().optional(),
+      provider_started_at: z.string().nullable().optional(), finalized_at: z.string().nullable().optional(),
+    },
+    async (args) => callSerythraePlatform(env, 'kai_platform_turn_put', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_turn_resolve',
+    'Internal Serythrae residence operation: resolve a stable turn idempotency key before accepting a replay.',
+    { session_id: z.string(), idempotency_key: z.string() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_turn_resolve', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_compaction_put',
+    'Internal Serythrae residence operation: persist a verified closed-range compaction receipt.',
+    {
+      compaction_id: z.string(), session_id: z.string(), source_start_sequence: z.number(),
+      source_end_sequence: z.number(), source_event_ids: z.array(z.string()), summary_event_id: z.string(),
+      summary_text: z.string(), recent_start_sequence: z.number(), compaction_model: z.string(),
+      prompt_version: z.string(), source_token_count: z.number().optional(),
+      summary_token_count: z.number().optional(), created_at: z.string().optional(),
+    },
+    async (args) => callSerythraePlatform(env, 'kai_platform_compaction_put', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_hydrate',
+    'Internal Serythrae residence operation: hydrate one durable Kai session for restart recovery.',
+    { session_id: z.string(), limit: z.number().optional(), turn_limit: z.number().optional(), include_all: z.boolean().optional() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_hydrate', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_sessions_list',
+    'Internal Serythrae residence operation: list durable Kai sessions.',
+    { include_archived: z.boolean().optional(), limit: z.number().optional() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_sessions_list', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_search',
+    'Internal Serythrae residence operation: search original durable events, including compacted ranges.',
+    { query: z.string(), session_id: z.string().optional(), limit: z.number().optional() },
+    async (args) => callSerythraePlatform(env, 'kai_platform_search', args),
+  )
+
+  server.tool(
+    'kaisoryth_platform_bootstrap_active',
+    'Internal Serythrae residence operation: read the approved Kai bootstrap and pending NESTSoul proposals.',
+    {},
+    async () => callSerythraePlatform(env, 'kai_platform_bootstrap_active'),
+  )
+
   server.tool(
     'kaisoryth_capabilities_status',
     'Read the authoritative health and manifest revision for Kai’s Serythrae capability doorway.',

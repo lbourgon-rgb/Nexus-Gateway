@@ -76,3 +76,20 @@ test('Nexus registers the complete Stage 1 Kai doorway surface', async () => {
     assert.match(source, new RegExp(`['"]${name}['"]`))
   }
 })
+
+test('Kai durable residence wrappers stay on the Nexus to Serythrae doorway path', () => {
+  for (const name of [
+    'kaisoryth_platform_session_put',
+    'kaisoryth_platform_event_put',
+    'kaisoryth_platform_event_link',
+    'kaisoryth_platform_turn_put',
+    'kaisoryth_platform_turn_resolve',
+    'kaisoryth_platform_compaction_put',
+    'kaisoryth_platform_hydrate',
+    'kaisoryth_platform_sessions_list',
+    'kaisoryth_platform_search',
+    'kaisoryth_platform_bootstrap_active',
+  ]) assert.match(source, new RegExp(name))
+  assert.match(source, /\/api\/kaisoryth\/platform\/tool/)
+  assert.match(source, /tool,\s*arguments: args/)
+})
