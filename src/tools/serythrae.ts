@@ -4,6 +4,8 @@ import type { Env } from '../env'
 import { proxyRest } from '../proxy'
 
 const KAI_ONLY = 'kaisoryth'
+const KAI_DOORWAY_PATH = '/api/kaisoryth/mcp'
+const KAI_DOORWAY_SCHEMA_VERSION = 'nexus.kaisoryth-doorway.v1'
 
 const KAI_HOME_TOOL_BY_BACKEND: Record<string, string> = {
   nesteq_orient: 'kaisoryth_orient',
@@ -50,7 +52,191 @@ function serythraeGatewayRest(env: Env, path: string, body: Record<string, unkno
   return proxyRest(base ? `${base}${path}` : undefined, body, method, headers, env.SERYTHRAE_GATEWAY)
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function doorwayReceipt(result: Record<string, unknown>): Record<string, unknown> {
+  const direct = asRecord(result.route_receipt)
+  if (Object.keys(direct).length) return direct
+  const structured = asRecord(result.structuredContent)
+  return asRecord(structured.route_receipt)
+}
+
+export async function callSerythraeDoorway(
+  env: Env,
+  method: 'tools/list' | 'tools/call' | 'skills/list' | 'skills/read' | 'capabilities/status',
+  params: Record<string, unknown> = {},
+) {
+  if (!env.SERYTHRAE_GATEWAY && !env.SERYTHRAE_GATEWAY_URL) {
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({
+          ok: false,
+          companion_id: KAI_ONLY,
+          error: { kind: 'unavailable', message: 'Serythrae Kai doorway is not configured' },
+        }),
+      }],
+      isError: true,
+    }
+  }
+  const base = (env.SERYTHRAE_GATEWAY ? 'https://serythrae.internal' : env.SERYTHRAE_GATEWAY_URL || '').replace(/\/+$/, '')
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  if (env.SERYTHRAE_GATEWAY_API_KEY) headers.set('Authorization', `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}`)
+  const request = new Request(`${base}${KAI_DOORWAY_PATH}`, {
+    method: 'POST',
+    headers,
+    signal: AbortSignal.timeout(10000),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: crypto.randomUUID(),
+      method,
+      params: {
+        ...params,
+        companion_id: KAI_ONLY,
+      },
+    }),
+  })
+
+  try {
+    const response = env.SERYTHRAE_GATEWAY
+      ? await env.SERYTHRAE_GATEWAY.fetch(request)
+      : await fetch(request)
+    const text = await response.text()
+    let payload: Record<string, unknown>
+    try {
+      payload = asRecord(JSON.parse(text))
+    } catch {
+      payload = {}
+    }
+    const error = asRecord(payload.error)
+    if (!response.ok || Object.keys(error).length) {
+      const gatewayMessage = typeof error.message === 'string'
+        ? error.message
+        : `Serythrae doorway HTTP ${response.status}`
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            ok: false,
+            schema_version: KAI_DOORWAY_SCHEMA_VERSION,
+            companion_id: KAI_ONLY,
+            method,
+            error: {
+              kind: asRecord(error.data).kind || (response.status === 403 ? 'forbidden' : 'upstream_error'),
+              message: gatewayMessage,
+              status: response.status,
+            },
+            route_receipt: {
+              receipt_id: crypto.randomUUID(),
+              companion_id: KAI_ONLY,
+              method,
+              generated_at: new Date().toISOString(),
+              hops: [{ service: 'nexus-gateway', role: 'shared-hallway-router' }],
+            },
+          }),
+        }],
+        isError: true,
+      }
+    }
+
+    const result = asRecord(payload.result)
+    const gatewayReceipt = doorwayReceipt(result)
+    const gatewayHops = Array.isArray(gatewayReceipt.hops) ? gatewayReceipt.hops : []
+    const envelope = {
+      ok: true,
+      schema_version: KAI_DOORWAY_SCHEMA_VERSION,
+      companion_id: KAI_ONLY,
+      method,
+      result,
+      route_receipt: {
+        receipt_id: gatewayReceipt.receipt_id || crypto.randomUUID(),
+        companion_id: KAI_ONLY,
+        method,
+        generated_at: gatewayReceipt.generated_at || new Date().toISOString(),
+        hops: [
+          { service: 'nexus-gateway', role: 'shared-hallway-router' },
+          ...gatewayHops,
+        ],
+      },
+    }
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(envelope) }],
+      structuredContent: envelope,
+    }
+  } catch (error) {
+    const timeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({
+          ok: false,
+          schema_version: KAI_DOORWAY_SCHEMA_VERSION,
+          companion_id: KAI_ONLY,
+          method,
+          error: {
+            kind: timeout ? 'timeout' : 'upstream_error',
+            message: timeout
+              ? 'Serythrae Kai doorway timed out'
+              : (error instanceof Error ? error.message : String(error)),
+          },
+          route_receipt: {
+            receipt_id: crypto.randomUUID(),
+            companion_id: KAI_ONLY,
+            method,
+            generated_at: new Date().toISOString(),
+            hops: [{ service: 'nexus-gateway', role: 'shared-hallway-router' }],
+          },
+        }),
+      }],
+      isError: true,
+    }
+  }
+}
+
 export function registerSerythraeTools(server: McpServer, env: Env) {
+  server.tool(
+    'kaisoryth_capabilities_status',
+    'Read the authoritative health and manifest revision for Kai’s Serythrae capability doorway.',
+    {},
+    async () => callSerythraeDoorway(env, 'capabilities/status'),
+  )
+
+  server.tool(
+    'kaisoryth_tools_list',
+    'List only the currently healthy, allowlisted tools available to Kai through his Serythrae doorway.',
+    {},
+    async () => callSerythraeDoorway(env, 'tools/list'),
+  )
+
+  server.tool(
+    'kaisoryth_tool_call',
+    'Call one tool from Kai’s current Serythrae capability manifest. The doorway pins companion scope and returns a route receipt.',
+    {
+      name: z.string(),
+      arguments: z.record(z.string(), z.unknown()).optional().default({}),
+    },
+    async (args) => callSerythraeDoorway(env, 'tools/call', args),
+  )
+
+  server.tool(
+    'kaisoryth_skills_list',
+    'List compact Kai skill metadata and content hashes through the Serythrae doorway without loading full skill bodies.',
+    {},
+    async () => callSerythraeDoorway(env, 'skills/list'),
+  )
+
+  server.tool(
+    'kaisoryth_skill_read',
+    'Load one Kai skill body by name through the Serythrae doorway.',
+    { name: z.string() },
+    async (args) => callSerythraeDoorway(env, 'skills/read', args),
+  )
+
   server.tool('serythrae_status', 'Read Serythrae gateway health for Kai/NESTeq routing.', {}, async () => {
     const home = env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY
       ? await proxyRest(`${(env.SERYTHRAE_GATEWAY_URL || 'https://serythrae.internal').replace(/\/+$/, '')}/health`, {}, 'GET', {}, env.SERYTHRAE_GATEWAY)
