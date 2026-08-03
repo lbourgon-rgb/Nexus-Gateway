@@ -88,13 +88,37 @@ export function registerContinuityTools(server: McpServer, env: Env) {
 
   server.tool('continuity_mirror_export', 'Export events for a local mirror cursor.', {
     mirror: z.string().optional(),
+    companion_id: z.string().optional(),
+    source: z.string().optional(),
     limit: z.number().optional(),
   }, async (args) => {
     const params = new URLSearchParams()
     if (args.mirror) params.set('mirror', args.mirror)
+    if (args.companion_id) params.set('companion_id', normalizeCompanionId(args.companion_id))
+    if (args.source) params.set('source', args.source)
     if (args.limit) params.set('limit', String(args.limit))
     return continuityFetch(env, `/mirror/export${params.toString() ? `?${params}` : ''}`, { method: 'GET' })
   })
+
+  server.tool('continuity_mirror_bootstrap', 'Create a mirror cursor at the latest matching event without replaying history.', {
+    mirror: z.string(),
+    companion_id: z.string().optional(),
+    source: z.string().optional(),
+  }, async (args) => continuityFetch(env, '/mirror/bootstrap', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...args,
+      companion_id: args.companion_id ? normalizeCompanionId(args.companion_id) : undefined,
+    }),
+  }))
+
+  server.tool('continuity_mirror_ack', 'Acknowledge the last durably handled event for a named mirror cursor.', {
+    mirror: z.string(),
+    last_event_id: z.string(),
+  }, async (args) => continuityFetch(env, '/mirror/ack', {
+    method: 'POST',
+    body: JSON.stringify(args),
+  }))
 
   server.tool('continuity_wake_candidates', 'List runner wake candidates for harness-bound companions.', {
     companion_id: z.string().optional().describe('Canonical companion_id or accepted alias'),
