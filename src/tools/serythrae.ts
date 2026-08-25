@@ -211,6 +211,39 @@ export async function callSerythraeDoorway(
 
 export function registerSerythraeTools(server: McpServer, env: Env) {
   server.tool(
+    'kaisoryth_residence_discord_deliver',
+    'Internal Serythrae residence control: deliver one already-committed canonical response. This tool never generates or mints ownership.',
+    {
+      companion_id: z.literal('kaisoryth'),
+      job_key: z.string().min(1).max(500),
+      response_event_id: z.string().min(1).max(240),
+      candidate_id: z.string().min(1).max(240),
+      source_event_id: z.string().min(1).max(240),
+      continuity_event_id: z.string().min(1).max(240),
+      surface: z.literal('discord'),
+      conversation_id: z.string().min(1).max(240),
+      session_id: z.string().min(1).max(240),
+      runner_id: z.string().min(1).max(240),
+      runner_epoch: z.number().int().positive(),
+      candidate_lease_epoch: z.number().int().positive(),
+    },
+    async (args) => serythraeGatewayRest(env, '/internal/kaisoryth/discord/deliver', {
+      companion_id: KAI_ONLY,
+      job_key: args.job_key,
+      response_event_id: args.response_event_id,
+      candidate_id: args.candidate_id,
+      source_event_id: args.source_event_id,
+      continuity_event_id: args.continuity_event_id,
+      surface: 'discord',
+      conversation_id: args.conversation_id,
+      session_id: args.session_id,
+      runner_id: args.runner_id,
+      runner_epoch: args.runner_epoch,
+      candidate_lease_epoch: args.candidate_lease_epoch,
+    }),
+  )
+
+  server.tool(
     'kaisoryth_platform_session_put',
     'Internal Serythrae residence operation: idempotently create or update one Kai platform session.',
     {

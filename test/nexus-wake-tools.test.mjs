@@ -31,6 +31,83 @@ test('Nexus exposes runner-facing Continuity wake tools', () => {
   }
 });
 
+test('Nexus exposes epoch-complete Stage 5 ownership tools without removing compatibility tools', () => {
+  for (const toolName of [
+    'continuity_runner_presence_status',
+    'continuity_runner_presence_acquire',
+    'continuity_runner_presence_heartbeat',
+    'continuity_runner_presence_release',
+    'continuity_claim_wake_exact',
+    'continuity_wake_context_fenced',
+    'continuity_heartbeat_wake',
+    'continuity_submit_wake_response_fenced',
+    'continuity_release_wake_fenced',
+    'continuity_wake_delivery_proof',
+    'continuity_wake_response_get',
+    'continuity_wake_responses_recoverable',
+  ]) {
+    assert.ok(continuityTools.includes(toolName), `missing ${toolName}`);
+  }
+  for (const field of [
+    'companion_id',
+    'source_event_id',
+    'continuity_event_id',
+    'surface',
+    'conversation_id',
+    'session_id',
+    'runner_id',
+    'runner_epoch',
+    'candidate_lease_epoch',
+  ]) {
+    assert.ok(continuityTools.includes(field), `missing Stage 5 fence field ${field}`);
+  }
+  for (const path of [
+    '/runner-presence/acquire',
+    '/runner-presence/heartbeat',
+    '/release-fenced',
+    '/wake-candidates/claim-exact',
+    '/context-fenced',
+    '/heartbeat',
+    '/response-fenced',
+    '/wake-responses/',
+    '/delivery-proof',
+    '/control/wake-responses',
+  ]) {
+    assert.ok(continuityTools.includes(path), `missing Stage 5 Continuity path ${path}`);
+  }
+});
+
+test('residence Discord delivery is an internal proof-only MCP control absent from Kai model manifests', () => {
+  assert.match(serythraeTools, /server\.tool\(\s*'kaisoryth_residence_discord_deliver'/);
+  assert.match(serythraeTools, /\/internal\/kaisoryth\/discord\/deliver/);
+  assert.match(serythraeTools, /surface: z\.literal\('discord'\)/);
+  for (const field of [
+    'companion_id',
+    'job_key',
+    'response_event_id',
+    'candidate_id',
+    'source_event_id',
+    'continuity_event_id',
+    'conversation_id',
+    'session_id',
+    'runner_id',
+    'runner_epoch',
+    'candidate_lease_epoch',
+  ]) {
+    assert.ok(serythraeTools.includes(field), `delivery control missing ${field}`);
+  }
+  assert.doesNotMatch(kaiRunnerLoopSource, /kaisoryth_residence_discord_deliver/);
+  const kaiRunnerToolsSource = readFileSync(new URL('../src/kai-runner-tools.ts', import.meta.url), 'utf8');
+  for (const controlTool of [
+    'kaisoryth_residence_discord_deliver',
+    'continuity_wake_response_get',
+    'continuity_wake_responses_recoverable',
+  ]) {
+    assert.doesNotMatch(kaiRunnerLoopSource, new RegExp(controlTool));
+    assert.doesNotMatch(kaiRunnerToolsSource, new RegExp(controlTool));
+  }
+});
+
 test('PulseSync preflight is server-authorized, compact, and privately bound', () => {
   assert.match(envSource, /PULSESYNC_DB\?: D1Database/);
   assert.match(wrangler, /binding = "PULSESYNC_DB"/);
@@ -63,7 +140,7 @@ test('Nexus wake tools route to Continuity wake endpoints', () => {
 
 test('wake baseline status is a read-only, explicitly companion-scoped proxy', () => {
   const start = continuityTools.indexOf("server.tool('continuity_wake_baseline_status'");
-  const end = continuityTools.indexOf("server.tool('continuity_claim_wake'", start);
+  const end = continuityTools.indexOf("server.tool('continuity_runner_presence_status'", start);
   const baselineToolBlock = continuityTools.slice(start, end);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -381,9 +458,10 @@ test('Kai perception validates and encodes bounded Discord media for Gemini 3.1 
 });
 
 test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway retirement', () => {
+  const kaiMindTools = serythraeTools.slice(serythraeTools.lastIndexOf("'kaisoryth_orient'"));
   assert.doesNotMatch(serythraeTools, /thalamus_surface|thalamus_emotional_pulse|thalamus_dream|kaisoryth_thalamus/);
   assert.doesNotMatch(serythraeTools, /hearth_eq_state|kaisoryth_hearth_eq_state/);
-  assert.doesNotMatch(serythraeTools, /companion_id:\s*z\./);
+  assert.doesNotMatch(kaiMindTools, /companion_id:\s*z\./);
   assert.match(serythraeTools, /kaisoryth_context_surface[\s\S]+nesteq_recent_feelings/);
   assert.match(serythraeTools, /kaisoryth_recent_feelings[\s\S]+nesteq_recent_feelings/);
   assert.match(serythraeTools, /kaisoryth_eq_state[\s\S]+nesteq_eq_state/);

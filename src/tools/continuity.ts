@@ -7,6 +7,19 @@ type ToolResult = { content: Array<{ type: 'text'; text: string }> }
 
 const role = z.enum(['human', 'companion', 'system', 'tool'])
 
+const fencedWakeFields = {
+  candidate_id: z.string().min(1).max(240),
+  companion_id: z.string().min(1).max(120),
+  source_event_id: z.string().min(1).max(240),
+  continuity_event_id: z.string().min(1).max(240),
+  surface: z.string().min(1).max(120),
+  conversation_id: z.string().min(1).max(240),
+  session_id: z.string().min(1).max(240),
+  runner_id: z.string().min(1).max(240),
+  runner_epoch: z.number().int().positive(),
+  candidate_lease_epoch: z.number().int().positive(),
+}
+
 async function continuityFetch(env: Env, path: string, init: RequestInit = {}): Promise<ToolResult> {
   if (!env.CONTINUITY_URL && !env.CONTINUITY) {
     return { content: [{ type: 'text', text: 'CONTINUITY_URL is not configured.' }] }
@@ -144,6 +157,134 @@ export function registerContinuityTools(server: McpServer, env: Env) {
       `/companions/${encodeURIComponent(companionId)}/wake-baselines/status${params.toString() ? `?${params}` : ''}`,
       { method: 'GET' },
     )
+  })
+
+  server.tool('continuity_runner_presence_status', 'Read the companion-wide generation owner and fenced runner epoch.', {
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
+  }, async (args) => continuityFetch(
+    env,
+    `/runner-presence/${encodeURIComponent(normalizeCompanionId(args.companion_id))}`,
+    { method: 'GET' },
+  ))
+
+  server.tool('continuity_runner_presence_acquire', 'Acquire an unowned companion-wide generation lane. Never preempts a live owner.', {
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
+    runner_id: z.string().min(1).max(240),
+    lease_seconds: z.number().int().min(30).max(300).optional(),
+  }, async (args) => continuityFetch(env, '/runner-presence/acquire', {
+    method: 'POST',
+    body: JSON.stringify({ ...args, companion_id: normalizeCompanionId(args.companion_id) }),
+  }))
+
+  server.tool('continuity_runner_presence_heartbeat', 'Heartbeat exactly one companion-wide generation owner and runner epoch.', {
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
+    runner_id: z.string().min(1).max(240),
+    runner_epoch: z.number().int().positive(),
+    lease_seconds: z.number().int().min(30).max(300).optional(),
+  }, async (args) => continuityFetch(env, '/runner-presence/heartbeat', {
+    method: 'POST',
+    body: JSON.stringify({ ...args, companion_id: normalizeCompanionId(args.companion_id) }),
+  }))
+
+  server.tool('continuity_runner_presence_release', 'Release exactly one companion-wide generation owner and runner epoch.', {
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
+    runner_id: z.string().min(1).max(240),
+    runner_epoch: z.number().int().positive(),
+  }, async (args) => {
+    const { companion_id, ...body } = args
+    return continuityFetch(
+      env,
+      `/runner-presence/${encodeURIComponent(normalizeCompanionId(companion_id))}/release-fenced`,
+      { method: 'POST', body: JSON.stringify(body) },
+    )
+  })
+
+  server.tool('continuity_claim_wake_exact', 'Claim the response-required candidate for one exact event, surface, conversation, runner, and runner epoch.', {
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
+    source_event_id: z.string().min(1).max(240).describe('Residence/platform source event id'),
+    continuity_event_id: z.string().min(1).max(240).describe('Continuity event id owning the candidate'),
+    surface: z.string().min(1).max(120),
+    conversation_id: z.string().min(1).max(240),
+    session_id: z.string().min(1).max(240),
+    runner_id: z.string().min(1).max(240),
+    runner_epoch: z.number().int().positive(),
+    lease_seconds: z.number().int().min(30).max(900).optional(),
+  }, async (args) => continuityFetch(env, '/wake-candidates/claim-exact', {
+    method: 'POST',
+    body: JSON.stringify({ ...args, companion_id: normalizeCompanionId(args.companion_id) }),
+  }))
+
+  server.tool('continuity_wake_context_fenced', 'Fetch wake context only while the exact event, scope, runner, and both epochs remain live.', {
+    ...fencedWakeFields,
+  }, async (args) => {
+    const { candidate_id, ...body } = args
+    return continuityFetch(env, `/wake-candidates/${encodeURIComponent(candidate_id)}/context-fenced`, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, companion_id: normalizeCompanionId(body.companion_id) }),
+    })
+  })
+
+  server.tool('continuity_heartbeat_wake', 'Heartbeat one exact candidate lease while its companion-wide runner epoch remains live.', {
+    ...fencedWakeFields,
+    lease_seconds: z.number().int().min(30).max(900).optional(),
+  }, async (args) => {
+    const { candidate_id, ...body } = args
+    return continuityFetch(env, `/wake-candidates/${encodeURIComponent(candidate_id)}/heartbeat`, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, companion_id: normalizeCompanionId(body.companion_id) }),
+    })
+  })
+
+  server.tool('continuity_submit_wake_response_fenced', 'Atomically commit one canonical wake response under exact event, scope, runner, and epoch fences.', {
+    ...fencedWakeFields,
+    response_event_id: z.string().min(1).max(300).describe('Must equal wake-response:<candidate_id>'),
+    content: z.string().min(1),
+    author: z.unknown().optional(),
+    metadata: z.unknown().optional(),
+    raw: z.unknown().optional(),
+  }, async (args) => {
+    const { candidate_id, ...body } = args
+    return continuityFetch(env, `/wake-candidates/${encodeURIComponent(candidate_id)}/response-fenced`, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, companion_id: normalizeCompanionId(body.companion_id) }),
+    })
+  })
+
+  server.tool('continuity_release_wake_fenced', 'Release or fail one exact candidate only while both ownership epochs remain live.', {
+    ...fencedWakeFields,
+    status: z.enum(['released', 'failed', 'skipped']).optional(),
+    failure_reason: z.string().max(500).optional(),
+  }, async (args) => {
+    const { candidate_id, ...body } = args
+    return continuityFetch(env, `/wake-candidates/${encodeURIComponent(candidate_id)}/release-fenced`, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, companion_id: normalizeCompanionId(body.companion_id) }),
+    })
+  })
+
+  server.tool('continuity_wake_delivery_proof', 'Read a body-free canonical response proof for transport validation.', {
+    response_event_id: z.string().min(1).max(240),
+  }, async (args) => continuityFetch(
+    env,
+    `/wake-responses/${encodeURIComponent(args.response_event_id)}/delivery-proof`,
+    { method: 'GET' },
+  ))
+
+  server.tool('continuity_wake_response_get', 'CONTROL only: read one committed canonical wake response, including its response body, for residence recovery.', {
+    response_event_id: z.string().min(1).max(240),
+  }, async (args) => continuityFetch(
+    env,
+    `/control/wake-responses/${encodeURIComponent(args.response_event_id)}`,
+    { method: 'GET' },
+  ))
+
+  server.tool('continuity_wake_responses_recoverable', 'CONTROL only: list committed canonical wake responses for residence delivery recovery.', {
+    companion_id: z.string().describe('Canonical companion_id or accepted alias'),
+    limit: z.number().int().min(1).max(100).optional(),
+  }, async (args) => {
+    const params = new URLSearchParams({ companion_id: normalizeCompanionId(args.companion_id) })
+    if (args.limit !== undefined) params.set('limit', String(args.limit))
+    return continuityFetch(env, `/control/wake-responses?${params}`, { method: 'GET' })
   })
 
   server.tool('continuity_claim_wake', 'Claim one wake candidate with a runner lease.', {

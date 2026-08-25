@@ -29,11 +29,32 @@ let checkpointStarted = 0;
 let checkpointCompleted = 0;
 let checkpointAborted = 0;
 let homeFallbackCalls = 0;
+let residenceDeliveryCalls = 0;
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/runner-presence/kaisoryth') {
       return Response.json({ companion_id: 'kaisoryth', active: false, lease: null });
+    }
+    if (url.pathname === '/control/wake-responses/response-fixture' && request.method === 'GET') {
+      return Response.json({
+        companion_id: 'kaisoryth',
+        response_event_id: 'response-fixture',
+        candidate_id: 'candidate-fixture',
+        source_event_id: 'source-fixture',
+        continuity_event_id: 'continuity-fixture',
+        surface: 'discord',
+        conversation_id: 'discord:private-room',
+        session_id: 'kai-inbox:fixture',
+        runner_id: 'serythrae-platform:mini-pc',
+        runner_epoch: 7,
+        candidate_lease_epoch: 3,
+        content: 'Canonical response body.',
+        committed_at: '2026-08-25T12:29:00.000Z',
+      });
+    }
+    if (url.pathname === '/control/wake-responses' && request.method === 'GET') {
+      return Response.json({ companion_id: url.searchParams.get('companion_id'), responses: [] });
     }
     if (url.pathname === '/internal/kaisoryth/fallback') {
       homeFallbackCalls += 1;
@@ -52,6 +73,22 @@ export default {
         ok: true,
         companion_id: 'kaisoryth',
         source: 'serythrae-gw',
+      });
+    }
+    if (url.pathname === '/internal/kaisoryth/discord/deliver' && request.method === 'POST') {
+      residenceDeliveryCalls += 1;
+      const body = await request.json();
+      return Response.json({
+        ok: true,
+        replayed: residenceDeliveryCalls > 1,
+        job_key: body.job_key,
+        response_event_id: body.response_event_id,
+        surface: 'discord',
+        status: 'delivered',
+        transport_receipt_id: 'discord-receipt:' + body.job_key,
+        sent_message_ids: ['discord-message-fixture'],
+        completed_at: '2026-08-25T12:30:00.000Z',
+        received: body,
       });
     }
     if (request.method === 'POST') {
@@ -103,7 +140,7 @@ export default {
     if (url.pathname.startsWith('/api/archive/stats')) {
       return Response.json({ total_messages: 5 });
     }
-    if (url.pathname === '/stats') return Response.json({ checkpointStarted, checkpointCompleted, checkpointAborted, homeFallbackCalls });
+    if (url.pathname === '/stats') return Response.json({ checkpointStarted, checkpointCompleted, checkpointAborted, homeFallbackCalls, residenceDeliveryCalls });
     return Response.json({
       ok: true,
       threads: [],
@@ -263,6 +300,42 @@ async function mcpNotification(worker, route, authorization) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
   });
+}
+
+async function mcpPayload(response) {
+  const text = await response.text();
+  if (!(response.headers.get('Content-Type') || '').includes('text/event-stream')) return JSON.parse(text);
+  const data = text.split(/\r?\n/).filter(line => line.startsWith('data: ')).at(-1);
+  return JSON.parse(data.slice(6));
+}
+
+async function authenticatedMcpCall(worker, key, name, args) {
+  const headers = {
+    Authorization: `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json, text/event-stream',
+  };
+  const initialized = await request(worker, '/mcp', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'stage5-test', version: '1' } },
+    }),
+  });
+  assert.equal(initialized.status, 200, await initialized.clone().text());
+  const sessionId = initialized.headers.get('Mcp-Session-Id');
+  assert.ok(sessionId);
+  await mcpPayload(initialized);
+  const called = await request(worker, '/mcp', {
+    method: 'POST',
+    headers: { ...headers, 'Mcp-Session-Id': sessionId },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
+  });
+  assert.equal(called.status, 200, await called.clone().text());
+  return mcpPayload(called);
 }
 
 async function assertSseAuthAccepted(worker, route, authorization, label) {
@@ -503,6 +576,51 @@ test('canonical Nexus Kai ingress auth accepts configured keys and fails closed 
     assert.equal(response.status, 503, `${route} must fail closed when MCP authority is unconfigured`);
     assert.deepEqual(await response.json(), { error: 'MCP_API_KEY is not configured' });
   }
+});
+
+test('authenticated Nexus MCP exposes the residence delivery control without minting or widening its proof job', async () => {
+  const job = {
+    companion_id: 'kaisoryth',
+    job_key: 'response-fixture:discord',
+    response_event_id: 'response-fixture',
+    candidate_id: 'candidate-fixture',
+    source_event_id: 'source-fixture',
+    continuity_event_id: 'continuity-fixture',
+    surface: 'discord',
+    conversation_id: 'discord:private-room',
+    session_id: 'kai-inbox:fixture',
+    runner_id: 'serythrae-platform:mini-pc',
+    runner_epoch: 7,
+    candidate_lease_epoch: 3,
+  };
+  const rpc = await authenticatedMcpCall(oldOnly, CURRENT_API_KEY, 'kaisoryth_residence_discord_deliver', job);
+  assert.equal(rpc.result.isError, undefined);
+  const receipt = JSON.parse(rpc.result.content[0].text);
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.job_key, job.job_key);
+  assert.deepEqual(receipt.received, job);
+  assert.equal(receipt.transport_receipt_id, `discord-receipt:${job.job_key}`);
+});
+
+test('authenticated Nexus MCP exposes canonical response recovery as control-only tools', async () => {
+  const getRpc = await authenticatedMcpCall(oldOnly, CURRENT_API_KEY, 'continuity_wake_response_get', {
+    response_event_id: 'response-fixture',
+  });
+  assert.equal(getRpc.result.isError, undefined);
+  const canonical = JSON.parse(getRpc.result.content[0].text);
+  assert.equal(canonical.response_event_id, 'response-fixture');
+  assert.equal(canonical.content, 'Canonical response body.');
+  assert.equal(canonical.source_event_id, 'source-fixture');
+  assert.equal(canonical.continuity_event_id, 'continuity-fixture');
+  assert.equal(canonical.session_id, 'kai-inbox:fixture');
+
+  const listRpc = await authenticatedMcpCall(oldOnly, CURRENT_API_KEY, 'continuity_wake_responses_recoverable', {
+    companion_id: 'kai',
+    limit: 25,
+  });
+  assert.equal(listRpc.result.isError, undefined);
+  const recoverable = JSON.parse(listRpc.result.content[0].text);
+  assert.deepEqual(recoverable, { companion_id: 'kaisoryth', responses: [] });
 });
 
 test('retired Nexus image route is an explicit Kai-home ownership tombstone', async () => {
