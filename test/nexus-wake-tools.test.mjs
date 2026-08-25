@@ -263,7 +263,7 @@ test('Nexus exposes Kai tools only as thin proxies through the Serythrae home', 
   assert.doesNotMatch(serythraeTools, /proxyMcp|SERYTHRAE_MIND/);
 });
 
-test('Nexus owns Kai fallback traffic only while no local runner presence is live', () => {
+test('Nexus cannot own Kai fallback traffic or invoke a second model runner', () => {
   assert.doesNotMatch(envSource, /KAI_RUNNER_ROUTE\?: string/);
   assert.doesNotMatch(envSource, /KAI_RUNNER_FORWARD_FALLBACK\?: string/);
   assert.match(wrangler, /KAI_TEXT_MODEL = "z-ai\/glm-5\.2"/);
@@ -272,26 +272,19 @@ test('Nexus owns Kai fallback traffic only while no local runner presence is liv
   assert.match(nexusIndex, /KAI_TEXT_PROVIDER_ORDER, 'z-ai,streamlake,novita,deepinfra'/);
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_ALLOW_FALLBACKS = "false"/);
   assert.match(wrangler, /KAI_TEXT_PRIMARY_PROVIDER_REQUIRE_PARAMETERS = "true"/);
-  assert.match(wrangler, /KAI_RUNNER_TOOL_LOOP_ENABLED = "true"/);
-  assert.match(nexusIndex, /Nexus owns only shared ingress and the Continuity lease check/);
-  assert.match(nexusIndex, /https:\/\/serythrae\.internal/);
-  assert.match(nexusIndex, /forwardKaiHome\(env, '\/internal\/kaisoryth\/fallback'/);
+  assert.match(wrangler, /KAI_RUNNER_ENABLED = "false"/);
+  assert.match(wrangler, /KAI_RUNNER_TOOL_LOOP_ENABLED = "false"/);
+  assert.match(nexusIndex, /Nexus is a shared hallway and tool router/);
+  assert.match(nexusIndex, /Nexus model generation was permanently retired by the Stage 5 no-ghost cutover/);
+  assert.match(nexusIndex, /canonical_runner: 'serythrae-platform'/);
+  assert.doesNotMatch(nexusIndex, /forwardKaiHome\(env, '\/internal\/kaisoryth\/fallback'/);
   assert.doesNotMatch(nexusIndex, /return kaiRunnerRunLocal\(request, env\)/);
-  assert.match(nexusIndex, /X-Nexus-Kai-Decision': 'delegated_to_runner'/);
-  assert.match(nexusIndex, /await kaiRunnerPresenceGate\(env\)/);
   assert.match(nexusIndex, /isInternalNexusServiceRequest\(request\) \? null : await authorizeRequiredMcpBearer\(request, env\)/);
-  assert.match(nexusIndex, /KAI_RUNNER_TOOL_LOOP_ENABLED, 'true'/);
-  assert.match(nexusIndex, /const legacy = await generateKaiText\(env, promptPacket, KAI_PRIMARY_TEXT_MODEL, routingState\)/);
-  assert.match(nexusIndex, /kaiProviderPreferencesForModel\(env, input\.model\)/);
-  assert.match(kaiModelRoutingSource, /KAI_BACKUP_TEXT_MODEL = 'x-ai\/grok-4\.5'/);
-  assert.match(kaiModelRoutingSource, /order: \['xai'\]/);
-  assert.match(kaiModelRoutingSource, /allow_fallbacks: false/);
-  assert.match(nexusIndex, /qualifiesForKaiBackup\(failure\)/);
-  assert.match(nexusIndex, /catch \(error\) \{\s*throw new KaiModelRequestError\(kaiFailureFromThrown\(error\)\)/);
-  assert.match(nexusIndex, /createKaiAttemptBudget\(input\.timeout_ms \* 2\)/);
-  assert.doesNotMatch(nexusIndex, /models:\s*\[KAI_PRIMARY_TEXT_MODEL/);
-  assert.match(nexusIndex, /function canonicalKaiContinuityConversationId/);
-  assert.match(nexusIndex, /return value\.startsWith\('discord:'\) \? value : `discord:\$\{value\}`/);
+  assert.match(nexusIndex, /kai_runner_enabled: false/);
+  assert.match(nexusIndex, /kai_runner_route: 'retired-410'/);
+  assert.match(nexusIndex, /kai_runner_tool_loop_enabled: false/);
+  assert.match(nexusIndex, /kai_no_ghost_invariant: true/);
+  assert.match(nexusIndex, /kai_model_fallback_policy: 'none-residence-owned'/);
 });
 
 test('Kai bounded tool loop exposes schemas, receipts, scoped writes, and no arbitrary local actuator', () => {
@@ -503,7 +496,7 @@ test('Nexus mirrors Kai NESTeq capabilities needed before Serythrae gateway reti
   assert.match(serythraeTools, /kaisoryth_nestknow_landscape[\s\S]+nestknow_landscape[\s\S]+entity_scope: KAI_ONLY/);
 });
 
-test('canonical Kai runner mirrors the useful retired NESTeq and Catalouge contract without broad writes', () => {
+test('retired Nexus runner schema remains narrow but is inaccessible from ingress', () => {
   for (const toolName of [
     'kaisoryth_orient',
     'kaisoryth_context_surface',
@@ -524,8 +517,8 @@ test('canonical Kai runner mirrors the useful retired NESTeq and Catalouge contr
   assert.match(nexusIndex, /direct_mind_configured: Boolean\(\(env\.SERYTHRAE_MIND \|\| env\.SERYTHRAE_MIND_URL\) && env\.SERYTHRAE_MIND_API_KEY\)/);
   assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_update_progress'/);
   assert.doesNotMatch(kaiRunnerLoopSource, /name: 'catalouge_add_annotation'/);
-  assert.match(nexusIndex, /generation still executes behind Kai's Serythrae door/);
-  assert.match(nexusIndex, /\/internal\/kaisoryth\/fallback/);
+  assert.match(nexusIndex, /Nexus model generation was permanently retired by the Stage 5 no-ghost cutover/);
+  assert.doesNotMatch(nexusIndex, /forwardKaiHome\(env, '\/internal\/kaisoryth\/fallback'/);
 });
 
 test('Nexus exposes Kai workspace as hallway tools without broad PC access', () => {

@@ -3292,17 +3292,18 @@ async function forwardKaiHome(
 }
 
 async function kaiRunnerRun(request: Request, env: Env): Promise<Response> {
-  // Nexus owns only shared ingress and the Continuity lease check. If no local
-  // runner is present, generation still executes behind Kai's Serythrae door.
+  // Stage 5 no-ghost invariant: Nexus is a shared hallway and tool router. It
+  // may never assemble or invoke a second Kai, even as a fallback.
   const unauthorized = isInternalNexusServiceRequest(request) ? null : await authorizeRequiredMcpBearer(request, env)
   if (unauthorized) return unauthorized
-  const presenceGate = await kaiRunnerPresenceGate(env)
-  if (presenceGate) return presenceGate
-  const body = await request.text()
-  return forwardKaiHome(env, '/internal/kaisoryth/fallback', body, {
-    ...(request.headers.get('X-Nexus-Kai-Canary')
-      ? { 'X-Nexus-Kai-Canary': request.headers.get('X-Nexus-Kai-Canary') as string }
-      : {}),
+  return new Response(JSON.stringify({
+    ok: false,
+    disabled: true,
+    canonical_runner: 'serythrae-platform',
+    error: 'Nexus model generation was permanently retired by the Stage 5 no-ghost cutover.',
+  }), {
+    status: 410,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS },
   })
 }
 
@@ -3755,15 +3756,18 @@ export default {
           serythrae_workspace_actuator: Boolean(env.SERYTHRAE_GATEWAY_URL || env.SERYTHRAE_GATEWAY),
           serythrae_mind_direct: Boolean(env.SERYTHRAE_MIND || (env.SERYTHRAE_MIND_URL && env.SERYTHRAE_MIND_API_KEY)),
           kai_companion_id: kaiCompanionId(env),
-          kai_runner_enabled: envFlag(env.KAI_RUNNER_ENABLED),
-          kai_runner_route: 'nexus',
-          kai_runner_tool_loop_enabled: envText(env.KAI_RUNNER_TOOL_LOOP_ENABLED, 'true').toLowerCase() !== 'false',
-          kai_runner_rollback_mode: 'nexus-prefetch-only',
+          kai_runner_enabled: false,
+          kai_runner_config_flag_ignored: envFlag(env.KAI_RUNNER_ENABLED),
+          kai_runner_route: 'retired-410',
+          kai_runner_tool_loop_enabled: false,
+          kai_runner_rollback_mode: 'none',
+          kai_canonical_runner: 'serythrae-platform',
+          kai_no_ghost_invariant: true,
           kai_discord_delivery_enabled: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED),
-          kai_text_model_configured: Boolean(envPresent(env.OPENROUTER_API_KEY)),
-          kai_text_model: KAI_PRIMARY_TEXT_MODEL,
-          kai_backup_text_model: configuredKaiBackupModel(env),
-          kai_model_fallback_policy: 'qualifying-availability-timeout-transport-only',
+          kai_text_model_configured: false,
+          kai_text_model: null,
+          kai_backup_text_model: null,
+          kai_model_fallback_policy: 'none-residence-owned',
           kai_vision_enabled: envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter',
           kai_vision_configured: Boolean(envChoice(env.KAI_VISION_PROVIDER, 'openrouter') === 'openrouter' && kaiVisionModels(env).length > 0 && envPresent(env.OPENROUTER_API_KEY)),
           kai_image_enabled: envProviderEnabled(env.KAI_IMAGE_PROVIDER),
@@ -3801,11 +3805,11 @@ export default {
         readinessRow('serythrae_mind', 'Kai / NESTeq Mind', [env.SERYTHRAE_MIND || env.SERYTHRAE_MIND_URL, env.SERYTHRAE_MIND_API_KEY], 'direct authenticated Kai mind backend configured'),
         {
           id: 'kai_runner',
-          label: 'Kai / Serythrae Home Fallback',
-          status: env.SERYTHRAE_GATEWAY || env.SERYTHRAE_GATEWAY_URL ? 'ok' : 'not_configured',
-          note: env.SERYTHRAE_GATEWAY || env.SERYTHRAE_GATEWAY_URL
-            ? 'Nexus performs only the lease gate, then forwards to Kai Serythrae home'
-            : 'Kai Serythrae home fallback is not configured',
+          label: 'Kai / Residence Model Owner',
+          status: envFlag(env.KAI_RUNNER_ENABLED) ? 'warn' : 'ok',
+          note: envFlag(env.KAI_RUNNER_ENABLED)
+            ? 'Legacy Nexus runner flag is ignored; all runner routes return 410 and serythrae-platform remains canonical'
+            : 'serythrae-platform is canonical; Nexus model-runner routes are permanently retired with HTTP 410',
           last_checked: new Date().toISOString(),
         },
         {
@@ -3815,7 +3819,13 @@ export default {
           note: envFlag(env.KAI_DISCORD_DELIVERY_ENABLED) ? 'Discord delivery enabled' : 'Discord delivery disabled by safety gate',
           last_checked: new Date().toISOString(),
         },
-        readinessRow('kai_text_model', 'Kai / Messaging Models', [envText(env.OPENROUTER_API_KEY)], `Primary ${KAI_PRIMARY_TEXT_MODEL}; backup ${configuredKaiBackupModel(env)} only for qualifying availability, timeout, or transport failures`, 'OPENROUTER_API_KEY missing'),
+        {
+          id: 'kai_text_model',
+          label: 'Kai / Final-response Model',
+          status: 'ok',
+          note: 'owned only by Serythrae.ai warm residence sessions; Nexus has no final-response model route',
+          last_checked: new Date().toISOString(),
+        },
         readinessRow('kai_catalouge', 'Kai / Catalouge Reading', [env.CATALOUGE_URL || env.CATALOUGE], 'Catalouge reading tools configured for kaisoryth through service binding or URL fallback', 'CATALOUGE binding or CATALOUGE_URL missing'),
         {
           id: 'kai_vision',

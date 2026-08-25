@@ -639,7 +639,7 @@ test('retired Nexus image route is an explicit Kai-home ownership tombstone', as
   });
 });
 
-test('live Kai harness presence returns a body-free delegated receipt before any model call', async () => {
+test('retired Nexus runner stays closed even if stale harness presence claims to be active', async () => {
   for (const route of ['/api/kaisoryth/run', '/api/kaisoryth/runner-preview']) {
     const response = await request(activeLane, route, {
       method: 'POST',
@@ -647,17 +647,21 @@ test('live Kai harness presence returns a body-free delegated receipt before any
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: 'This must never reach a model while the harness lease is live.' }),
     });
-    assert.equal(response.status, 202, route);
-    assert.equal(response.headers.get('X-Nexus-Kai-Decision'), 'delegated_to_runner');
+    assert.equal(response.status, 410, route);
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
-    assert.equal(await response.text(), '');
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      disabled: true,
+      canonical_runner: 'serythrae-platform',
+      error: 'Nexus model generation was permanently retired by the Stage 5 no-ghost cutover.',
+    });
   }
   const openRouter = await activeLane.getWorker('openrouter-mock');
   const stats = await (await openRouter.fetch('https://openrouter.test/stats')).json();
   assert.equal(stats.totalCalls, 0);
 });
 
-test('Nexus forwards fallback bodies and canary headers to Kai home without generating locally', async () => {
+test('Nexus refuses fallback bodies and canary headers without forwarding them', async () => {
   const body = JSON.stringify({
     content: 'bounded fallback canary',
     model_canary: { simulate_primary_failure: true, reason_code: 'explicit-live-canary' },
@@ -668,30 +672,34 @@ test('Nexus forwards fallback bodies and canary headers to Kai home without gene
     headers: { 'Content-Type': 'application/json', 'X-Nexus-Kai-Canary': KAI_MODEL_CANARY_KEY },
     body,
   });
-  assert.equal(authorized.status, 200);
+  assert.equal(authorized.status, 410);
   const result = await authorized.json();
-  assert.equal(result.source, 'serythrae-gw');
-  assert.equal(result.received.content, 'bounded fallback canary');
-  assert.equal(result.canary_header, KAI_MODEL_CANARY_KEY);
+  assert.equal(result.canonical_runner, 'serythrae-platform');
+  assert.equal(result.disabled, true);
+  const backend = await both.getWorker('backend-mock');
+  const stats = await (await backend.fetch('https://backend.test/stats')).json();
+  assert.equal(stats.homeFallbackCalls, 0);
 });
 
-test('Nexus fallback does not call its own OpenRouter lane', async () => {
+test('retired Nexus runner calls neither its own model lane nor Kai home', async () => {
   const response = await request(routingFallback, '/api/kaisoryth/run', {
     method: 'POST',
     authorization: `Bearer ${CURRENT_API_KEY}`,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: 'Use your private orientation once, then answer this fallback canary.' }),
   });
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 410);
   const result = await response.json();
-  assert.equal(result.source, 'serythrae-gw');
-  assert.equal(result.response, 'Fixture reply generated inside Kai home.');
+  assert.equal(result.canonical_runner, 'serythrae-platform');
   const openRouter = await routingFallback.getWorker('openrouter-mock');
   const stats = await (await openRouter.fetch('https://openrouter.test/stats')).json();
   assert.equal(stats.totalCalls, 0);
+  const backend = await routingFallback.getWorker('backend-mock');
+  const backendStats = await (await backend.fetch('https://backend.test/stats')).json();
+  assert.equal(backendStats.homeFallbackCalls, 0);
 });
 
-test('Nexus does not start local deadline or Catalouge work for fallback requests', async () => {
+test('retired Nexus runner does not start local deadline or Catalouge work', async () => {
   const response = await request(deadlineAbort, '/api/kaisoryth/run', {
     method: 'POST',
     authorization: `Bearer ${CURRENT_API_KEY}`,
@@ -705,10 +713,10 @@ test('Nexus does not start local deadline or Catalouge work for fallback request
       },
     }),
   });
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 410);
   const backend = await deadlineAbort.getWorker('backend-mock');
   const stats = await (await backend.fetch('https://backend.test/stats')).json();
-  assert.ok(stats.homeFallbackCalls >= 1);
+  assert.equal(stats.homeFallbackCalls, 0);
   assert.equal(stats.checkpointStarted, 0);
   assert.equal(stats.checkpointCompleted, 0);
   assert.equal(stats.checkpointAborted, 0);
