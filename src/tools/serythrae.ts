@@ -6,6 +6,8 @@ import { proxyRest } from '../proxy'
 const KAI_ONLY = 'kaisoryth'
 const KAI_DOORWAY_PATH = '/api/kaisoryth/mcp'
 const KAI_DOORWAY_SCHEMA_VERSION = 'nexus.kaisoryth-doorway.v1'
+const KAI_DOORWAY_TIMEOUT_MS = 10_000
+const KAI_IMAGE_TIMEOUT_MS = 180_000
 
 const KAI_HOME_TOOL_BY_BACKEND: Record<string, string> = {
   nesteq_orient: 'kaisoryth_orient',
@@ -98,10 +100,13 @@ export async function callSerythraeDoorway(
     Accept: 'application/json',
   })
   if (env.SERYTHRAE_GATEWAY_API_KEY) headers.set('Authorization', `Bearer ${env.SERYTHRAE_GATEWAY_API_KEY}`)
+  // Image generation includes provider work and durable storage before returning a URL.
+  const imageGeneration = method === 'tools/call' && params.name === 'kaisoryth_generate_image'
+  const timeoutMs = imageGeneration ? KAI_IMAGE_TIMEOUT_MS : KAI_DOORWAY_TIMEOUT_MS
   const request = new Request(`${base}${KAI_DOORWAY_PATH}`, {
     method: 'POST',
     headers,
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       jsonrpc: '2.0',
       id: crypto.randomUUID(),
@@ -192,7 +197,9 @@ export async function callSerythraeDoorway(
           error: {
             kind: timeout ? 'timeout' : 'upstream_error',
             message: timeout
-              ? 'Serythrae Kai doorway timed out'
+              ? imageGeneration
+                ? 'Serythrae Kai image generation timed out waiting for a result; upstream completion is unknown. Check for an existing image before retrying.'
+                : 'Serythrae Kai doorway timed out'
               : (error instanceof Error ? error.message : String(error)),
           },
           route_receipt: {
