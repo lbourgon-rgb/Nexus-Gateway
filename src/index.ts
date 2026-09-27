@@ -1,6 +1,8 @@
 import { McpAgent } from 'agents/mcp'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from './env'
+import { AXIOM_DREAM_MCP_PATH } from './dream-auth'
+import { serveAxiomDreamMcp } from './dream-mcp'
 
 import { registerCogCorTools } from './tools/cogcor'
 import { registerSpotifyTools } from './tools/spotify'
@@ -3720,6 +3722,9 @@ async function kaiMindDashboard(env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     let url = new URL(request.url)
+
+    // Separate, fail-closed Axiom dream surface; never uses shared MCP auth.
+    if (url.pathname === AXIOM_DREAM_MCP_PATH) return serveAxiomDreamMcp(request, env, ctx)
 
     // CORS preflight
     if (request.method === 'OPTIONS') {

@@ -1,0 +1,9 @@
+name = "axiom-dream-http-local-fixture"
+main = "dream-http-worker.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+AXIOM_DREAM_MCP_API_KEY = "axiom-only-local-fixture"
+MCP_API_KEY = "shared-local-fixture"
+MCP_API_KEY_NEXT = "shared-next-local-fixture"

@@ -44,6 +44,8 @@ export interface Env {
   // Secrets
   MCP_API_KEY?: string
   MCP_API_KEY_NEXT?: string
+  // Dedicated Axiom dream MCP author credential; must differ from shared keys.
+  AXIOM_DREAM_MCP_API_KEY?: string
   VEL_PREFLIGHT_DISCORD_API_KEY?: string
   VEL_PREFLIGHT_CODEX_API_KEY?: string
   VEL_PREFLIGHT_CLAUDE_API_KEY?: string
